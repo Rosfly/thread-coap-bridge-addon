@@ -2,7 +2,7 @@ name: "Thread CoAP Bridge"
 version: "0.1.0"
 slug: "thread_coap_bridge"
 description: "Bridge CoAP devices on Thread network to Home Assistant via MQTT"
-url: "https://github.com/yourusername/ha-addon-thread-coap-bridge"
+url: "https://github.com/Rosfly/thread-coap-bridge-addon"
 arch:
   - aarch64
   - amd64
@@ -10,20 +10,11 @@ arch:
 init: false
 startup: services
 boot: auto
-
-# Host network access required for IPv6 multicast
 host_network: true
 
-# Capabilities needed for raw socket access
-privileged:
-  - NET_ADMIN
-  - NET_RAW
-
-# Services this add-on depends on
 services:
   - mqtt:need
 
-# Default configuration
 options:
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883
@@ -34,7 +25,6 @@ options:
   thread_interface: "wpan0"
   multicast_address: "ff03::fd"
 
-# Configuration schema (validated by Home Assistant)
 schema:
   mqtt_host: str
   mqtt_port: port
@@ -45,14 +35,9 @@ schema:
   thread_interface: str
   multicast_address: str
 
-# Persistent data directories
 map:
   - config:rw
   - share:rw
   - ssl:ro
 
-# Enable Home Assistant API access
 homeassistant_api: true
-
-# Container image (update with your GitHub username)
-image: "ghcr.io/{arch}-addon-thread-coap-bridge"
