@@ -6,6 +6,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install system dependencies
 RUN apk add --no-cache \
+    bash \
+    libcoap \
+    tcpdump \
     python3 \
     py3-pip \
     py3-setuptools \
