@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Cleanup when Thread CoAP Bridge service stops
+# ==============================================================================
+
+bashio::log.info "Thread CoAP Bridge service stopped"
+
+# Exit code 0 means normal shutdown
+# Exit code != 0 means the service crashed and s6 will restart it
+exit 0

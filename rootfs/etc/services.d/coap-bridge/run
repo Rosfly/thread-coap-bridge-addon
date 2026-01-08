@@ -1,0 +1,42 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start the Thread CoAP Bridge service
+# ==============================================================================
+
+bashio::log.info "Starting Thread CoAP Bridge..."
+
+# Check if MQTT service is available
+if ! bashio::services.available "mqtt"; then
+    bashio::log.fatal "MQTT service not available!"
+    bashio::exit.nok "Please install and start the Mosquitto broker add-on"
+fi
+
+# Get MQTT service details from Home Assistant Supervisor
+MQTT_HOST=$(bashio::services "mqtt" "host")
+MQTT_PORT=$(bashio::services "mqtt" "port")
+MQTT_USER=$(bashio::services "mqtt" "username")
+MQTT_PASS=$(bashio::services "mqtt" "password")
+
+bashio::log.info "MQTT Broker: ${MQTT_HOST}:${MQTT_PORT}"
+
+# Check Thread interface exists
+if ! ip link show wpan0 &> /dev/null; then
+    bashio::log.warning "Thread interface wpan0 not found!"
+    bashio::log.warning "Make sure OpenThread Border Router add-on is running"
+fi
+
+# Export environment variables for the application
+export MQTT_HOST="${MQTT_HOST}"
+export MQTT_PORT="${MQTT_PORT}"
+export MQTT_USER="${MQTT_USER}"
+export MQTT_PASS="${MQTT_PASS}"
+
+# Show configuration
+bashio::log.info "Configuration loaded:"
+bashio::log.info "  Discovery interval: $(bashio::config 'discovery_interval')s"
+bashio::log.info "  Log level: $(bashio::config 'log_level')"
+bashio::log.info "  Thread interface: $(bashio::config 'thread_interface')"
+
+# Run the Python application
+cd /app
+exec python3 main.py
