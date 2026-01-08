@@ -7,6 +7,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # Install system dependencies
 RUN apk add --no-cache \
     bash \
+    jq \
     libcoap \
     tcpdump \
     python3 \

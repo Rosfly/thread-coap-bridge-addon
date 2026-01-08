@@ -27,6 +27,7 @@ options:
   log_level: "info"
   thread_interface: "wpan0"
   multicast_address: "ff03::fd"
+  debug_shell: false
 
 schema:
   mqtt_host: str
@@ -37,6 +38,7 @@ schema:
   log_level: list(debug|info|warning|error)
   thread_interface: str
   multicast_address: str
+  debug_shell: bool
 
 map:
   - config:rw

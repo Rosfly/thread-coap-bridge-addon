@@ -1,4 +1,4 @@
-# Thread CoAP Bridge - Home Assistant Add-on
+# Thread CoAP Bridge - Home Assistant Add-on 2.0
 
 A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to Home Assistant via MQTT Discovery.
 

@@ -5,6 +5,16 @@
 
 bashio::log.info "Starting Thread CoAP Bridge..."
 
+# 🔧 DEBUG SHELL MODE
+if bashio::config.has_value 'debug_shell' && bashio::config.true 'debug_shell'; then
+    bashio::log.warning "==============================="
+    bashio::log.warning "DEBUG SHELL ENABLED"
+    bashio::log.warning "Use SSH & Web Terminal → Web Terminal"
+    bashio::log.warning "Type commands to debug CoAP/Thread"
+    bashio::log.warning "==============================="
+    exec /bin/bash
+fi
+
 # Check if MQTT service is available
 if ! bashio::services.available "mqtt"; then
     bashio::log.fatal "MQTT service not available!"
@@ -40,3 +50,4 @@ bashio::log.info "  Thread interface: $(bashio::config 'thread_interface')"
 # Run the Python application
 cd /app
 exec python3 main.py
+
