@@ -1,0 +1,10 @@
+# Thread CoAP to MQTT Bridge - Python Dependencies
+
+# CoAP client library
+aiocoap>=0.4.7
+
+# MQTT client library
+paho-mqtt>=1.6.1
+
+# Async SQLite support
+aiosqlite>=0.19.0

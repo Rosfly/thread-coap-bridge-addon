@@ -28,7 +28,7 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy requirements first (better Docker caching)
-COPY requirements.txt .
+COPY rootfs/app/requirements.txt .
 
 # Install Python dependencies
 RUN pip3 install --no-cache-dir -r requirements.txt

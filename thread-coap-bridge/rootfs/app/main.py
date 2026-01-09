@@ -8,35 +8,49 @@ import asyncio
 import signal
 import sys
 import logging
+import json
 from config_handler import ConfigHandler
+from device_registry import DeviceRegistry
+from mqtt_publisher import MQTTPublisher
+from coap_discovery import CoAPDiscovery
+from coap_client import CoAPClient
 
 logger = logging.getLogger(__name__)
 
 
 class CoAPBridgeService:
     """Main bridge service orchestrator."""
-    
+
     def __init__(self):
         self.config = ConfigHandler()
         self.running = True
-        
+
+        # Components
+        self.registry = None
+        self.mqtt = None
+        self.discovery = None
+        self.coap_client = None
+
+        # Background tasks
+        self.tasks = []
+
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
-        
+
         logger.info("CoAP Bridge Service initialized")
-    
+
     def _handle_shutdown(self, signum, frame):
         """Handle graceful shutdown on SIGTERM/SIGINT."""
         logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
-    
+
     async def start(self):
         """Start the bridge service."""
         logger.info("=" * 60)
         logger.info("Starting Thread CoAP-MQTT Bridge")
         logger.info("=" * 60)
-        
+
         # Display configuration
         logger.info("Configuration:")
         logger.info(f"  MQTT Host: {self.config.get('mqtt_host')}")
@@ -44,64 +58,213 @@ class CoAPBridgeService:
         logger.info(f"  Discovery Interval: {self.config.get('discovery_interval')}s")
         logger.info(f"  Thread Interface: {self.config.get('thread_interface')}")
         logger.info(f"  Multicast Address: {self.config.get('multicast_address')}")
-        
+
         try:
-            # TODO: Initialize MQTT client
-            logger.info("TODO: Connect to MQTT broker")
-            
-            # TODO: Initialize CoAP context
-            logger.info("TODO: Initialize CoAP client")
-            
-            # TODO: Initialize device registry
-            logger.info("TODO: Initialize device registry")
-            
-            # TODO: Start discovery loop
-            logger.info("TODO: Start discovery loop")
-            
-            # Placeholder: Keep service running
+            # Initialize device registry
+            logger.info("Initializing device registry...")
+            self.registry = DeviceRegistry(db_path='/data/devices.db')
+            await self.registry.initialize()
+
+            # Initialize MQTT client
+            logger.info("Connecting to MQTT broker...")
+            self.mqtt = MQTTPublisher(self.config.mqtt_config)
+            await self.mqtt.connect()
+
+            # Set MQTT command callback for LED control from HA
+            self.mqtt.set_command_callback(self._handle_mqtt_command)
+
+            # Initialize CoAP client
+            logger.info("Initializing CoAP client...")
+            self.coap_client = CoAPClient(self.mqtt)
+            await self.coap_client.initialize()
+
+            # Initialize CoAP discovery
+            logger.info("Initializing CoAP discovery...")
+            self.discovery = CoAPDiscovery(self.registry, self.config.coap_config)
+            await self.discovery.initialize()
+
+            # Start background tasks
+            logger.info("Starting background tasks...")
+
+            # Task 1: Periodic discovery
+            discovery_task = asyncio.create_task(
+                self._discovery_loop(),
+                name="discovery_loop"
+            )
+            self.tasks.append(discovery_task)
+
+            # Task 2: Monitor and commission devices
+            monitor_task = asyncio.create_task(
+                self._monitor_devices(),
+                name="device_monitor"
+            )
+            self.tasks.append(monitor_task)
+
+            logger.info("=" * 60)
             logger.info("Service started successfully")
-            logger.info("Waiting for shutdown signal...")
-            
+            logger.info("Bridge is now running - monitoring for CoAP devices...")
+            logger.info("=" * 60)
+
+            # Keep service running
             while self.running:
                 await asyncio.sleep(1)
-            
+
             logger.info("Shutdown initiated...")
-            
-            # TODO: Cleanup tasks
-            logger.info("Cleanup complete")
-            
+
+            # Cleanup
+            await self._cleanup()
+
         except Exception as e:
             logger.exception(f"Fatal error in main loop: {e}")
             sys.exit(1)
-    
+
     async def _discovery_loop(self):
         """Periodic discovery of new devices."""
         interval = self.config.get('discovery_interval', 60)
-        
+
+        logger.info(f"Starting discovery loop (interval: {interval}s)")
+
         while self.running:
             try:
-                logger.debug(f"Running device discovery...")
-                # TODO: Implement CoAP multicast discovery
+                logger.debug("Running device discovery...")
+                await self.discovery.discover_devices()
                 await asyncio.sleep(interval)
             except Exception as e:
                 logger.error(f"Error in discovery loop: {e}")
                 await asyncio.sleep(interval)
-    
+
     async def _monitor_devices(self):
-        """Monitor registered devices and handle new devices."""
+        """Monitor registered devices and commission new ones."""
+        logger.info("Starting device monitor")
+
         while self.running:
             try:
-                # TODO: Check for uncommissioned devices
-                # TODO: Setup MQTT discovery
-                # TODO: Start CoAP observations
-                await asyncio.sleep(5)
+                # Check for uncommissioned devices
+                uncommissioned = await self.registry.get_uncommissioned_devices()
+
+                for device in uncommissioned:
+                    logger.info(f"Found uncommissioned device: {device.device_id}")
+
+                    # Get device resources
+                    resources = await self.registry.get_device_resources(device.device_id)
+
+                    if resources:
+                        # Publish MQTT Discovery for each resource
+                        for resource in resources:
+                            logger.info(f"  Publishing discovery for {resource.uri_path}")
+                            self.mqtt.publish_discovery(
+                                device.device_id,
+                                resource.resource_type,
+                                resource.uri_path,
+                                device.ipv6_address
+                            )
+
+                        # Publish device availability
+                        self.mqtt.publish_availability(device.device_id, available=True)
+
+                        # Start monitoring resources
+                        for resource in resources:
+                            # Start polling (use polling instead of observe for now)
+                            poll_task = asyncio.create_task(
+                                self.coap_client.poll_resource(
+                                    device.device_id,
+                                    device.ipv6_address,
+                                    resource.uri_path,
+                                    interval=5
+                                ),
+                                name=f"poll_{device.device_id}_{resource.uri_path}"
+                            )
+                            self.tasks.append(poll_task)
+
+                        # Mark as commissioned
+                        await self.registry.mark_commissioned(device.device_id)
+
+                        logger.info(f"Device {device.device_id} commissioned successfully")
+
+                await asyncio.sleep(10)  # Check every 10 seconds
+
             except Exception as e:
                 logger.error(f"Error in device monitor: {e}")
-                await asyncio.sleep(5)
+                await asyncio.sleep(10)
+
+    async def _handle_mqtt_command(self, device_id, resource, payload):
+        """Handle MQTT commands from Home Assistant (e.g., LED control)."""
+        logger.info(f"Received MQTT command: {device_id}/{resource} = {payload}")
+
+        try:
+            # Get device from registry
+            device = await self.registry.get_device_by_id(device_id)
+
+            if not device:
+                logger.warning(f"Device {device_id} not found in registry")
+                return
+
+            # Build CoAP URI
+            uri_path = f"/{resource}"
+
+            # Send CoAP PUT request
+            success = await self.coap_client.put_resource(
+                device.ipv6_address,
+                uri_path,
+                payload
+            )
+
+            if success:
+                logger.info(f"Successfully sent command to {device_id}{uri_path}")
+
+                # Read back the state to update MQTT
+                response = await self.coap_client.get_resource(device.ipv6_address, uri_path)
+                if response:
+                    try:
+                        state_value = json.loads(response)
+                    except json.JSONDecodeError:
+                        state_value = response
+
+                    self.mqtt.publish_state(device_id, uri_path, state_value)
+            else:
+                logger.warning(f"Failed to send command to {device_id}{uri_path}")
+
+        except Exception as e:
+            logger.error(f"Error handling MQTT command: {e}")
+
+    async def _cleanup(self):
+        """Cleanup tasks and connections."""
+        logger.info("Cleaning up...")
+
+        # Cancel all background tasks
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        # Shutdown components
+        if self.coap_client:
+            await self.coap_client.shutdown()
+
+        if self.discovery:
+            await self.discovery.shutdown()
+
+        if self.mqtt:
+            await self.mqtt.disconnect()
+
+        if self.registry:
+            await self.registry.close()
+
+        logger.info("Cleanup complete")
 
 
 def main():
     """Main entry point."""
+    # Setup logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.StreamHandler()]
+    )
+
     try:
         logger.info("Initializing Thread CoAP Bridge...")
         service = CoAPBridgeService()
