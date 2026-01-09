@@ -35,9 +35,12 @@ class MQTTPublisher:
             # Initialize paho-mqtt client
             self.client = mqtt.Client(client_id="thread_coap_bridge", protocol=mqtt.MQTTv311)
 
-            # Set username/password if provided
-            if self.username:
+            # Set username/password if provided (only if username is not empty)
+            if self.username and self.username.strip():
+                logger.info(f"Setting MQTT credentials for user: {self.username}")
                 self.client.username_pw_set(self.username, self.password)
+            else:
+                logger.info("Connecting to MQTT without authentication")
 
             # Set callbacks
             self.client.on_connect = self._on_connect
@@ -54,7 +57,7 @@ class MQTTPublisher:
             self.client.loop_start()
 
             # Wait for connection
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
             if self.connected:
                 logger.info("Successfully connected to MQTT broker")
