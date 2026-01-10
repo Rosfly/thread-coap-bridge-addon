@@ -18,15 +18,16 @@ class CoAPDiscovery:
 
     WELL_KNOWN_CORE = "/.well-known/core"
     DISCOVERY_TIMEOUT = 5.0  # seconds
+    MULTICAST_GROUPS = ['ff03::fd', 'ff03::1']  # Try both CoAP nodes and all Thread nodes
 
     def __init__(self, device_registry, config):
         self.registry = device_registry
-        self.multicast_address = config.get('multicast_address', 'ff03::fd')
+        self.multicast_address = config.get('multicast_address', 'ff03::fd')  # Kept for backwards compat
         self.thread_interface = config.get('thread_interface', 'wpan0')
         self.context = None
         self.discovered_addresses = set()
 
-        logger.info(f"CoAP Discovery initialized (multicast: {self.multicast_address})")
+        logger.info(f"CoAP Discovery initialized (trying groups: {', '.join(self.MULTICAST_GROUPS)})")
 
     async def initialize(self):
         """Initialize CoAP context."""
@@ -38,50 +39,49 @@ class CoAPDiscovery:
             raise
 
     async def discover_devices(self):
-        """Perform multicast discovery."""
-        logger.debug(f"Broadcasting discovery to {self.multicast_address}")
-
+        """Perform multicast discovery to all Thread multicast groups."""
         if not self.context:
             logger.error("CoAP context not initialized")
             return
 
-        try:
-            # Create multicast request to .well-known/core
-            uri = f'coap://[{self.multicast_address}]{self.WELL_KNOWN_CORE}'
-            request = Message(code=GET, uri=uri, mtype=NON)
-
-            logger.debug(f"Sending multicast discovery to {uri}")
-
-            # Multicast discovery: send and collect responses
-            # We need to handle multiple responses from different devices
-            responses = []
-            request_handle = self.context.request(request)
-
+        # Try both ff03::fd (CoAP nodes) and ff03::1 (all Thread nodes)
+        for mcast_addr in self.MULTICAST_GROUPS:
             try:
-                # Wait for initial response
-                response = await asyncio.wait_for(
-                    request_handle.response,
-                    timeout=self.DISCOVERY_TIMEOUT
-                )
+                # Send with interface scope to ensure packets go to wpan0
+                uri = f'coap://[{mcast_addr}%{self.thread_interface}]{self.WELL_KNOWN_CORE}'
+                logger.info(f"Sending multicast discovery to {uri}")
 
-                if response.payload:
-                    source_addr = self._extract_source_address(response)
-                    if source_addr and source_addr not in self.discovered_addresses:
-                        logger.info(f"Discovered new device at {source_addr}")
-                        self.discovered_addresses.add(source_addr)
+                request = Message(code=GET, uri=uri, mtype=NON)
 
-                        # Parse resources and register device
-                        resources = self._parse_core_link_format(response.payload.decode('utf-8'))
-                        if resources:
-                            await self.registry.register_device(source_addr, resources=resources)
+                # Send and wait for responses
+                pr = self.context.request(request)
 
-            except asyncio.TimeoutError:
-                logger.debug("Discovery timeout (normal for multicast)")
-            except RequestTimedOut:
-                logger.debug("CoAP request timed out (normal for multicast)")
+                try:
+                    # Wait for first response (multicast typically gets one per device)
+                    response = await asyncio.wait_for(
+                        pr.response,
+                        timeout=self.DISCOVERY_TIMEOUT
+                    )
 
-        except Exception as e:
-            logger.error(f"Discovery error: {e}", exc_info=True)
+                    if response and response.payload:
+                        source_addr = self._extract_source_address(response)
+                        if source_addr and source_addr not in self.discovered_addresses:
+                            logger.info(f"✓ Discovered device at {source_addr} via {mcast_addr}")
+                            self.discovered_addresses.add(source_addr)
+
+                            # Parse and register
+                            resources = self._parse_core_link_format(response.payload.decode('utf-8'))
+                            if resources:
+                                await self.registry.register_device(source_addr, resources=resources)
+
+                except asyncio.TimeoutError:
+                    logger.debug(f"No response from {mcast_addr} (timeout)")
+
+            except Exception as e:
+                logger.error(f"Error with multicast {mcast_addr}: {e}")
+
+        if not self.discovered_addresses:
+            logger.warning("No devices discovered via multicast - devices may not be responding to multicast")
 
     async def query_device_resources(self, ipv6_addr):
         """Query individual device for its resources."""

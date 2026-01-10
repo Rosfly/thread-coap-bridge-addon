@@ -29,8 +29,14 @@ MQTT_PASS=$(bashio::services "mqtt" "password")
 
 bashio::log.info "MQTT Broker: ${MQTT_HOST}:${MQTT_PORT}"
 
-# Check Thread interface exists
-if ! ip link show wpan0 &> /dev/null; then
+# Check Thread interface exists and show diagnostics
+if ip link show wpan0 &> /dev/null; then
+    bashio::log.info "Thread interface wpan0: UP"
+    bashio::log.info "wpan0 IPv6 addresses:"
+    ip -6 addr show wpan0 | grep inet6 | while read line; do
+        bashio::log.info "  ${line}"
+    done
+else
     bashio::log.warning "Thread interface wpan0 not found!"
     bashio::log.warning "Make sure OpenThread Border Router add-on is running"
 fi
