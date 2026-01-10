@@ -187,6 +187,40 @@ class CoAPBridgeService:
                 logger.error(f"Error in device monitor: {e}")
                 await asyncio.sleep(10)
 
+    def _translate_mqtt_to_coap(self, resource, mqtt_payload):
+        """Translate Home Assistant MQTT payload to device CoAP format."""
+        try:
+            # Parse MQTT JSON payload
+            mqtt_data = json.loads(mqtt_payload)
+
+            # Handle LED resource
+            if resource == "led":
+                # Home Assistant sends: {"state": "ON"} or {"state": "OFF"}
+                # Device expects: {"led_id": 0, "state": 1} where 0=OFF, 1=ON, 2=TOGGLE
+                state_str = mqtt_data.get("state", "OFF").upper()
+
+                if state_str == "ON":
+                    state_num = 1
+                elif state_str == "OFF":
+                    state_num = 0
+                elif state_str == "TOGGLE":
+                    state_num = 2
+                else:
+                    logger.warning(f"Unknown LED state: {state_str}")
+                    return None
+
+                return {"led_id": 0, "state": state_num}
+
+            # For other resources, pass through as-is
+            return mqtt_payload
+
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON payload: {mqtt_payload}")
+            return None
+        except Exception as e:
+            logger.error(f"Error translating MQTT to CoAP: {e}")
+            return None
+
     async def _handle_mqtt_command(self, device_id, resource, payload):
         """Handle MQTT commands from Home Assistant (e.g., LED control)."""
         logger.info(f"Received MQTT command: {device_id}/{resource} = {payload}")
@@ -202,11 +236,17 @@ class CoAPBridgeService:
             # Build CoAP URI
             uri_path = f"/{resource}"
 
+            # Translate Home Assistant MQTT payload to device-specific format
+            coap_payload = self._translate_mqtt_to_coap(resource, payload)
+            if not coap_payload:
+                logger.warning(f"Could not translate MQTT payload: {payload}")
+                return
+
             # Send CoAP PUT request
             success = await self.coap_client.put_resource(
                 device.ipv6_address,
                 uri_path,
-                payload
+                coap_payload
             )
 
             if success:
