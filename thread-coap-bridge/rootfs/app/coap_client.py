@@ -51,6 +51,8 @@ class CoAPClient:
 
             if response.code.is_successful():
                 payload = response.payload.decode('utf-8')
+                # Strip null terminators that firmware includes
+                payload = payload.rstrip('\x00')
                 logger.debug(f"GET response from {ipv6_addr}{uri_path}: {payload}")
                 return payload
             else:
