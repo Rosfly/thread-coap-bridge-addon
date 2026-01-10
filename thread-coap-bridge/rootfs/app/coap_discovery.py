@@ -67,10 +67,15 @@ class CoAPDiscovery:
                         source_addr = self._extract_source_address(response)
                         if source_addr and source_addr not in self.discovered_addresses:
                             logger.info(f"✓ Discovered device at {source_addr} via {mcast_addr}")
+
+                            # Log the actual .well-known/core response for debugging
+                            payload_str = response.payload.decode('utf-8')
+                            logger.info(f"Device resources: {payload_str}")
+
                             self.discovered_addresses.add(source_addr)
 
                             # Parse and register
-                            resources = self._parse_core_link_format(response.payload.decode('utf-8'))
+                            resources = self._parse_core_link_format(payload_str)
                             if resources:
                                 await self.registry.register_device(source_addr, resources=resources)
 
