@@ -24,6 +24,7 @@ class MQTTPublisher:
         self.discovery_prefix = "homeassistant"
         self.connected = False
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self.loop = None  # Will be set in connect()
 
         logger.info(f"MQTT Publisher initialized (broker: {self.host}:{self.port})")
 
@@ -32,6 +33,9 @@ class MQTTPublisher:
         logger.info(f"Connecting to MQTT broker at {self.host}:{self.port}")
 
         try:
+            # Store event loop reference for callback thread
+            self.loop = asyncio.get_event_loop()
+
             # Initialize paho-mqtt client
             self.client = mqtt.Client(client_id="thread_coap_bridge", protocol=mqtt.MQTTv311)
 
@@ -218,9 +222,12 @@ class MQTTPublisher:
 
                 # Call command callback if set
                 if hasattr(self, '_command_callback') and self._command_callback:
-                    asyncio.create_task(
-                        self._command_callback(device_id, resource, payload)
-                    )
+                    # Schedule coroutine on main event loop from MQTT thread
+                    if self.loop:
+                        asyncio.run_coroutine_threadsafe(
+                            self._command_callback(device_id, resource, payload),
+                            self.loop
+                        )
 
         except Exception as e:
             logger.error(f"Error processing MQTT command: {e}")
