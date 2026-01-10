@@ -153,10 +153,33 @@ class CoAPDiscovery:
         try:
             # aiocoap stores remote address in response.remote
             if hasattr(response, 'remote') and response.remote:
-                # remote is typically a tuple (host, port)
+                # remote can be a tuple (host, port) or UDP6EndpointAddress object
                 if isinstance(response.remote, tuple):
-                    return response.remote[0]
-                return str(response.remote)
+                    addr = response.remote[0]
+                else:
+                    # It's an aiocoap UDP6EndpointAddress object
+                    addr = str(response.remote)
+
+                # Extract just the IPv6 address from various formats:
+                # - "fd70:c012:66ce:1:dd63:96f1:60f6:a43f"
+                # - "[fd70:c012:66ce:1:dd63:96f1:60f6:a43f]"
+                # - "<UDP6EndpointAddress [fd70:...] (locally ...)>"
+
+                # If it contains '<UDP6EndpointAddress', extract the bracketed address
+                if '<UDP6EndpointAddress' in addr:
+                    import re
+                    match = re.search(r'\[([0-9a-f:]+)\]', addr)
+                    if match:
+                        addr = match.group(1)
+
+                # Remove brackets if present
+                addr = addr.strip('[]')
+
+                # Remove interface suffix if present (e.g., %wpan0)
+                addr = addr.split('%')[0]
+
+                logger.debug(f"Extracted address: {addr}")
+                return addr
             return None
         except Exception as e:
             logger.error(f"Error extracting source address: {e}")
