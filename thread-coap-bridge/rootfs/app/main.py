@@ -153,6 +153,33 @@ class CoAPBridgeService:
                         # Publish MQTT Discovery for each resource
                         for resource in resources:
                             logger.info(f"  Publishing discovery for {resource.uri_path} (type: {resource.resource_type})")
+
+                            # For button resources, query to see how many buttons exist
+                            if resource.resource_type == "button":
+                                try:
+                                    response = await self.coap_client.get_resource(
+                                        device.ipv6_address,
+                                        resource.uri_path
+                                    )
+                                    if response:
+                                        btn_data = json.loads(response)
+                                        if 'btns' in btn_data:
+                                            # Create separate discovery for each button
+                                            for btn in btn_data['btns']:
+                                                btn_id = btn.get('btn_id', 0)
+                                                btn_uri = f"{resource.uri_path}{btn_id}"
+                                                logger.info(f"    Publishing discovery for button {btn_id}")
+                                                self.mqtt.publish_discovery(
+                                                    device.device_id,
+                                                    resource.resource_type,
+                                                    btn_uri,
+                                                    device.ipv6_address
+                                                )
+                                            continue  # Skip the default publish below
+                                except Exception as e:
+                                    logger.warning(f"Could not query button count: {e}")
+
+                            # Default: publish single resource
                             self.mqtt.publish_discovery(
                                 device.device_id,
                                 resource.resource_type,

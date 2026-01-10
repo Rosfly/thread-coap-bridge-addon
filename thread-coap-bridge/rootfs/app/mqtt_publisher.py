@@ -156,24 +156,34 @@ class MQTTPublisher:
     def publish_state(self, device_id, resource_uri, state_value):
         """Publish device state update."""
         object_id = resource_uri.strip('/')
-        state_topic = f"thread/{device_id}/{object_id}/state"
 
-        logger.debug(f"Publishing state: {state_topic} = {state_value}")
+        logger.debug(f"Publishing state: {state_value}")
 
         # Handle different state value types
         if isinstance(state_value, dict):
-            # For complex JSON responses (like button state with multiple buttons)
-            # Extract the relevant state value
-            if 'state' in state_value:
+            # Check if this is a multi-button response
+            if 'btns' in state_value and len(state_value['btns']) > 0:
+                # Publish separate state for each button
+                for btn in state_value['btns']:
+                    btn_id = btn.get('btn_id', 0)
+                    btn_state = str(btn.get('state', 0))
+                    btn_topic = f"thread/{device_id}/{object_id}{btn_id}/state"
+                    logger.debug(f"Publishing button state: {btn_topic} = {btn_state}")
+                    result = self.client.publish(btn_topic, btn_state, qos=1, retain=False)
+                    if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                        logger.error(f"Failed to publish button state: {result.rc}")
+                return  # Done - published all buttons
+
+            # For LED/single state resources
+            elif 'state' in state_value:
                 payload = str(state_value['state'])
-            elif 'btns' in state_value and len(state_value['btns']) > 0:
-                # For button: extract first button state
-                payload = str(state_value['btns'][0]['state'])
             else:
                 payload = json.dumps(state_value)
         else:
             payload = str(state_value)
 
+        # Publish single state
+        state_topic = f"thread/{device_id}/{object_id}/state"
         result = self.client.publish(state_topic, payload, qos=1, retain=False)
 
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
