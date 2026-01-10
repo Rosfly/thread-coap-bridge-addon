@@ -88,12 +88,14 @@ class DeviceRegistry:
         try:
             async with self.connection.cursor() as cursor:
                 # Insert or update device
+                # Reset commissioned to 0 on re-discovery to trigger re-commissioning
                 await cursor.execute('''
                     INSERT INTO devices (device_id, ipv6_address, eui64, last_seen, commissioned)
                     VALUES (?, ?, ?, ?, 0)
                     ON CONFLICT(device_id) DO UPDATE SET
                         ipv6_address=excluded.ipv6_address,
-                        last_seen=excluded.last_seen
+                        last_seen=excluded.last_seen,
+                        commissioned=0
                 ''', (device_id, ipv6_address, eui64, datetime.now()))
 
                 # Insert resources if provided

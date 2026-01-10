@@ -138,7 +138,8 @@ class MQTTPublisher:
         elif component == "binary_sensor":
             payload["payload_on"] = "0"  # GPIO_ACTIVE_LOW: 0 = pressed
             payload["payload_off"] = "1"  # 1 = not pressed
-            payload["device_class"] = "button"
+            # Don't set device_class for buttons - HA doesn't have a "button" class for binary_sensor
+            # The entity will appear as a generic binary_sensor
 
         elif component == "sensor":
             payload["unit_of_measurement"] = self._get_unit_for_sensor(resource_type)

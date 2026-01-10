@@ -147,11 +147,12 @@ class CoAPBridgeService:
 
                     # Get device resources
                     resources = await self.registry.get_device_resources(device.device_id)
+                    logger.info(f"Retrieved {len(resources)} resources from database for {device.device_id}")
 
                     if resources:
                         # Publish MQTT Discovery for each resource
                         for resource in resources:
-                            logger.info(f"  Publishing discovery for {resource.uri_path}")
+                            logger.info(f"  Publishing discovery for {resource.uri_path} (type: {resource.resource_type})")
                             self.mqtt.publish_discovery(
                                 device.device_id,
                                 resource.resource_type,
