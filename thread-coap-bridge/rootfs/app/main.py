@@ -218,27 +218,27 @@ class CoAPBridgeService:
     def _translate_mqtt_to_coap(self, resource, mqtt_payload):
         """Translate Home Assistant MQTT payload to device CoAP format."""
         try:
-            # Parse MQTT JSON payload
-            mqtt_data = json.loads(mqtt_payload)
-
             # Handle LED resource
             if resource == "led":
-                # HA sends the payload_on/payload_off values directly: {"led_id": 0, "state": 1}
-                # This is already in the correct format for the device, just validate and return
-                if 'led_id' in mqtt_data and 'state' in mqtt_data:
-                    return mqtt_data
+                # HA sends simple "ON" or "OFF" text
+                # Translate to device format: {"led_id": 0, "state": 1}
+                if mqtt_payload == "ON":
+                    return {"led_id": 0, "state": 1}
+                elif mqtt_payload == "OFF":
+                    return {"led_id": 0, "state": 0}
                 else:
-                    logger.warning(f"Invalid LED payload format: {mqtt_payload}")
+                    logger.warning(f"Unknown LED command: {mqtt_payload}")
                     return None
 
-            # For other resources, pass through as-is
-            return mqtt_payload
+            # For other resources, try to parse as JSON
+            try:
+                return json.loads(mqtt_payload)
+            except json.JSONDecodeError:
+                # Not JSON, return as-is
+                return mqtt_payload
 
-        except json.JSONDecodeError:
-            logger.error(f"Invalid JSON payload: {mqtt_payload}")
-            return None
         except Exception as e:
-            logger.error(f"Error translating MQTT to CoAP: {e}")
+            logger.error(f"Error translating MQTT payload: {e}")
             return None
 
     async def _handle_mqtt_command(self, device_id, resource, payload):

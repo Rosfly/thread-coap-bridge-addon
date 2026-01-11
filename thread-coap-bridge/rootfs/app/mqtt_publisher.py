@@ -128,8 +128,10 @@ class MQTTPublisher:
         # Add component-specific configuration
         if component == "light":
             payload["command_topic"] = command_topic
-            payload["payload_on"] = json.dumps({"led_id": 0, "state": 1})
-            payload["payload_off"] = json.dumps({"led_id": 0, "state": 0})
+            # Use simple ON/OFF commands for HA, translate in bridge
+            payload["payload_on"] = "ON"
+            payload["payload_off"] = "OFF"
+            # State topic uses 1/0
             payload["state_on"] = "1"
             payload["state_off"] = "0"
             payload["optimistic"] = False
