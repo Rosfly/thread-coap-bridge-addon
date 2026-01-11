@@ -158,25 +158,76 @@ class CoAPClient:
             if obs_key in self.observations:
                 del self.observations[obs_key]
 
-    async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5):
+    async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
+                           registry=None, offline_threshold=5):
         """
-        Poll a resource periodically (alternative to Observe for non-observable resources).
-        """
-        logger.info(f"Starting polling: {device_id} - coap://[{ipv6_addr}]{uri_path} (interval: {interval}s)")
+        Poll a resource periodically with failure tracking.
 
-        poll_key = f"{device_id}{uri_path}"
+        Args:
+            device_id: Device identifier
+            ipv6_addr: IPv6 address
+            uri_path: CoAP URI path
+            interval: Polling interval in seconds
+            registry: DeviceRegistry instance for updating last_seen
+            offline_threshold: Number of consecutive failures before marking offline
+        """
+        logger.info(f"Starting polling: {device_id} - coap://[{ipv6_addr}]{uri_path} "
+                    f"(interval: {interval}s, offline_threshold: {offline_threshold})")
+
+        consecutive_failures = 0
+        device_is_online = True
 
         while self.running:
             try:
                 payload = await self.get_resource(ipv6_addr, uri_path)
 
                 if payload:
+                    # Success - reset failure counter
+                    if consecutive_failures > 0:
+                        logger.info(f"Device {device_id} back online after {consecutive_failures} failures")
+
+                    consecutive_failures = 0
+
+                    # Update last_seen in registry
+                    if registry:
+                        await registry.update_device_failure(device_id, failed=False)
+
+                    # If device was offline, publish it as back online
+                    if not device_is_online:
+                        logger.info(f"Publishing {device_id} as online")
+                        self.mqtt.publish_availability(device_id, available=True)
+                        device_is_online = True
+
+                    # Parse and publish state
                     try:
                         state_value = json.loads(payload)
                     except json.JSONDecodeError:
                         state_value = payload
 
                     self.mqtt.publish_state(device_id, uri_path, state_value)
+
+                else:
+                    # Failure - increment counter
+                    consecutive_failures += 1
+
+                    if registry:
+                        await registry.update_device_failure(device_id, failed=True)
+
+                    logger.warning(f"Poll failed for {device_id}{uri_path} "
+                                  f"({consecutive_failures}/{offline_threshold} failures)")
+
+                    # Check if we've reached offline threshold
+                    if consecutive_failures >= offline_threshold and device_is_online:
+                        logger.warning(f"Device {device_id} marked as offline after "
+                                      f"{consecutive_failures} consecutive failures")
+
+                        # Publish offline availability
+                        self.mqtt.publish_availability(device_id, available=False)
+                        device_is_online = False
+
+                        # Mark in database
+                        if registry:
+                            await registry.mark_device_offline(device_id)
 
                 await asyncio.sleep(interval)
 
@@ -185,6 +236,11 @@ class CoAPClient:
                 break
             except Exception as e:
                 logger.error(f"Polling error for {device_id}{uri_path}: {e}")
+                consecutive_failures += 1
+
+                if registry:
+                    await registry.update_device_failure(device_id, failed=True)
+
                 await asyncio.sleep(interval)
 
     async def shutdown(self):

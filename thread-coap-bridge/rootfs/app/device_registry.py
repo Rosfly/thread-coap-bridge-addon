@@ -6,7 +6,7 @@ SQLite database for managing discovered devices and their resources.
 import logging
 import sqlite3
 import aiosqlite
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,8 @@ class DeviceRegistry:
                         eui64 TEXT,
                         last_seen TIMESTAMP,
                         commissioned INTEGER DEFAULT 0,
+                        consecutive_failures INTEGER DEFAULT 0,
+                        is_online INTEGER DEFAULT 1,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
@@ -255,6 +257,113 @@ class DeviceRegistry:
 
         except Exception as e:
             logger.error(f"Error decommissioning device {device_id}: {e}")
+
+    async def update_device_failure(self, device_id, failed=True):
+        """
+        Update device failure counter.
+
+        Args:
+            device_id: Device identifier
+            failed: True if poll failed, False if successful
+        """
+        try:
+            async with self.connection.cursor() as cursor:
+                if failed:
+                    # Increment failure counter
+                    await cursor.execute('''
+                        UPDATE devices
+                        SET consecutive_failures = consecutive_failures + 1
+                        WHERE device_id = ?
+                    ''', (device_id,))
+                else:
+                    # Reset failure counter and update last_seen
+                    await cursor.execute('''
+                        UPDATE devices
+                        SET consecutive_failures = 0,
+                            last_seen = ?,
+                            is_online = 1
+                        WHERE device_id = ?
+                    ''', (datetime.now(), device_id))
+
+                await self.connection.commit()
+
+        except Exception as e:
+            logger.error(f"Error updating device failure state for {device_id}: {e}")
+
+    async def mark_device_offline(self, device_id):
+        """Mark device as offline in database."""
+        try:
+            async with self.connection.cursor() as cursor:
+                await cursor.execute('''
+                    UPDATE devices
+                    SET is_online = 0
+                    WHERE device_id = ?
+                ''', (device_id,))
+
+                await self.connection.commit()
+                logger.info(f"Device {device_id} marked as offline in database")
+
+        except Exception as e:
+            logger.error(f"Error marking device offline: {e}")
+
+    async def get_devices_for_cleanup(self, offline_hours=24):
+        """
+        Get devices that have been offline for more than specified hours.
+
+        Args:
+            offline_hours: Hours threshold for cleanup
+
+        Returns:
+            List of Device objects to be cleaned up
+        """
+        try:
+            async with self.connection.cursor() as cursor:
+                cutoff_time = datetime.now() - timedelta(hours=offline_hours)
+
+                await cursor.execute('''
+                    SELECT device_id, ipv6_address, eui64, last_seen, commissioned
+                    FROM devices
+                    WHERE is_online = 0
+                      AND last_seen < ?
+                      AND commissioned = 1
+                ''', (cutoff_time,))
+
+                rows = await cursor.fetchall()
+
+                devices = []
+                for row in rows:
+                    device = Device(
+                        device_id=row[0],
+                        ipv6_address=row[1],
+                        eui64=row[2],
+                        last_seen=datetime.fromisoformat(row[3]) if row[3] else None,
+                        commissioned=bool(row[4])
+                    )
+                    devices.append(device)
+
+                logger.debug(f"Found {len(devices)} devices eligible for cleanup")
+                return devices
+
+        except Exception as e:
+            logger.error(f"Error getting devices for cleanup: {e}")
+            return []
+
+    async def get_device_failure_count(self, device_id):
+        """Get consecutive failure count for a device."""
+        try:
+            async with self.connection.cursor() as cursor:
+                await cursor.execute('''
+                    SELECT consecutive_failures
+                    FROM devices
+                    WHERE device_id = ?
+                ''', (device_id,))
+
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+        except Exception as e:
+            logger.error(f"Error getting failure count for {device_id}: {e}")
+            return 0
 
     async def close(self):
         """Close database connection."""

@@ -28,6 +28,9 @@ options:
   thread_interface: "wpan0"
   multicast_address: "ff03::fd"
   debug_shell: false
+  offline_threshold_polls: 5
+  cleanup_after_hours: 24
+  cleanup_check_interval: 3600
 
 schema:
   mqtt_host: str
@@ -39,6 +42,9 @@ schema:
   thread_interface: str
   multicast_address: str
   debug_shell: bool
+  offline_threshold_polls: int(3,20)
+  cleanup_after_hours: int(1,168)
+  cleanup_check_interval: int(300,86400)
 
 map:
   - config:rw

@@ -100,6 +100,13 @@ class CoAPBridgeService:
             )
             self.tasks.append(monitor_task)
 
+            # Task 3: Cleanup offline devices periodically
+            cleanup_task = asyncio.create_task(
+                self._cleanup_loop(),
+                name="cleanup_loop"
+            )
+            self.tasks.append(cleanup_task)
+
             logger.info("=" * 60)
             logger.info("Service started successfully")
             logger.info("Bridge is now running - monitoring for CoAP devices...")
@@ -191,14 +198,18 @@ class CoAPBridgeService:
                         self.mqtt.publish_availability(device.device_id, available=True)
 
                         # Start monitoring resources
+                        offline_threshold = self.config.get('offline_threshold_polls', 5)
+
                         for resource in resources:
-                            # Start polling (use polling instead of observe for now)
+                            # Start polling with failure tracking
                             poll_task = asyncio.create_task(
                                 self.coap_client.poll_resource(
                                     device.device_id,
                                     device.ipv6_address,
                                     resource.uri_path,
-                                    interval=5
+                                    interval=5,
+                                    registry=self.registry,
+                                    offline_threshold=offline_threshold
                                 ),
                                 name=f"poll_{device.device_id}_{resource.uri_path}"
                             )
@@ -214,6 +225,57 @@ class CoAPBridgeService:
             except Exception as e:
                 logger.error(f"Error in device monitor: {e}")
                 await asyncio.sleep(10)
+
+    async def _cleanup_loop(self):
+        """Background task to cleanup devices offline for extended period."""
+        cleanup_interval = self.config.get('cleanup_check_interval', 3600)  # Check hourly
+        cleanup_threshold_hours = self.config.get('cleanup_after_hours', 24)
+
+        logger.info(f"Starting cleanup loop (check interval: {cleanup_interval}s, "
+                    f"cleanup after: {cleanup_threshold_hours}h)")
+
+        while self.running:
+            try:
+                # Wait for next cleanup check
+                await asyncio.sleep(cleanup_interval)
+
+                logger.debug("Running device cleanup check...")
+
+                # Get devices eligible for cleanup
+                devices_to_cleanup = await self.registry.get_devices_for_cleanup(
+                    offline_hours=cleanup_threshold_hours
+                )
+
+                if devices_to_cleanup:
+                    logger.info(f"Found {len(devices_to_cleanup)} devices to cleanup")
+
+                    for device in devices_to_cleanup:
+                        logger.info(f"Cleaning up device {device.device_id} "
+                                   f"(offline since {device.last_seen})")
+
+                        # Publish empty discovery to remove from Home Assistant
+                        # (empty payload removes the entity)
+                        resources = await self.registry.get_device_resources(device.device_id)
+                        for resource in resources:
+                            # Publish empty discovery config to remove
+                            component = self.mqtt._map_resource_to_component(resource.resource_type)
+                            object_id = resource.uri_path.strip('/')
+                            topic = f"{self.mqtt.discovery_prefix}/{component}/{device.device_id}/{object_id}/config"
+
+                            # Empty payload removes entity from HA
+                            self.mqtt.client.publish(topic, "", qos=1, retain=True)
+                            logger.debug(f"Removed discovery for {device.device_id}/{object_id}")
+
+                        # Decommission device from registry
+                        await self.registry.decommission_device(device.device_id)
+
+                        logger.info(f"Device {device.device_id} cleaned up successfully")
+                else:
+                    logger.debug("No devices need cleanup")
+
+            except Exception as e:
+                logger.error(f"Error in cleanup loop: {e}")
+                await asyncio.sleep(cleanup_interval)
 
     def _translate_mqtt_to_coap(self, resource, mqtt_payload):
         """Translate Home Assistant MQTT payload to device CoAP format."""

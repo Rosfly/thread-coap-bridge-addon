@@ -52,6 +52,17 @@ bashio::log.info "Configuration loaded:"
 bashio::log.info "  Discovery interval: $(bashio::config 'discovery_interval')s"
 bashio::log.info "  Log level: $(bashio::config 'log_level')"
 bashio::log.info "  Thread interface: $(bashio::config 'thread_interface')"
+bashio::log.info "  Offline threshold: $(bashio::config 'offline_threshold_polls') polls"
+bashio::log.info "  Cleanup after: $(bashio::config 'cleanup_after_hours') hours"
+
+# Remove old database on first run with new schema
+# The app will create a new one with the correct schema automatically
+if [ -f "/data/devices.db" ] && [ ! -f "/data/.schema_updated" ]; then
+    bashio::log.warning "Removing old database (will be recreated with new schema)"
+    rm -f /data/devices.db
+    touch /data/.schema_updated
+    bashio::log.info "Database will be recreated - devices will need to be rediscovered"
+fi
 
 # Run the Python application
 cd /app
