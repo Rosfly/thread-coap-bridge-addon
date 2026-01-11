@@ -133,7 +133,6 @@ class MQTTPublisher:
             payload["state_on"] = "1"
             payload["state_off"] = "0"
             payload["optimistic"] = False
-            payload["schema"] = "json"
 
         elif component == "binary_sensor":
             # Firmware uses gpio_pin_get_dt() which handles GPIO_ACTIVE_LOW automatically
@@ -176,7 +175,12 @@ class MQTTPublisher:
                         logger.error(f"Failed to publish button state: {result.rc}")
                 return  # Done - published all buttons
 
-            # For LED/single state resources
+            # Check if this is a multi-LED response
+            elif 'leds' in state_value and len(state_value['leds']) > 0:
+                # Extract first LED state
+                payload = str(state_value['leds'][0].get('state', 0))
+
+            # For simple state resources
             elif 'state' in state_value:
                 payload = str(state_value['state'])
             else:
