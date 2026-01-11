@@ -223,21 +223,13 @@ class CoAPBridgeService:
 
             # Handle LED resource
             if resource == "led":
-                # Home Assistant sends: {"state": "ON"} or {"state": "OFF"}
-                # Device expects: {"led_id": 0, "state": 1} where 0=OFF, 1=ON, 2=TOGGLE
-                state_str = mqtt_data.get("state", "OFF").upper()
-
-                if state_str == "ON":
-                    state_num = 1
-                elif state_str == "OFF":
-                    state_num = 0
-                elif state_str == "TOGGLE":
-                    state_num = 2
+                # HA sends the payload_on/payload_off values directly: {"led_id": 0, "state": 1}
+                # This is already in the correct format for the device, just validate and return
+                if 'led_id' in mqtt_data and 'state' in mqtt_data:
+                    return mqtt_data
                 else:
-                    logger.warning(f"Unknown LED state: {state_str}")
+                    logger.warning(f"Invalid LED payload format: {mqtt_payload}")
                     return None
-
-                return {"led_id": 0, "state": state_num}
 
             # For other resources, pass through as-is
             return mqtt_payload
