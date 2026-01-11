@@ -136,8 +136,10 @@ class MQTTPublisher:
             payload["schema"] = "json"
 
         elif component == "binary_sensor":
-            payload["payload_on"] = "0"  # GPIO_ACTIVE_LOW: 0 = pressed
-            payload["payload_off"] = "1"  # 1 = not pressed
+            # Firmware uses gpio_pin_get_dt() which handles GPIO_ACTIVE_LOW automatically
+            # So it returns: 1 = pressed/active, 0 = not pressed/inactive
+            payload["payload_on"] = "1"   # 1 = button pressed
+            payload["payload_off"] = "0"  # 0 = button not pressed
             # Don't set device_class for buttons - HA doesn't have a "button" class for binary_sensor
             # The entity will appear as a generic binary_sensor
 
