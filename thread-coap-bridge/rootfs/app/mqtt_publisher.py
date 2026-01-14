@@ -184,9 +184,10 @@ class MQTTPublisher:
         else:
             payload = str(state_value)
 
-        # Publish single state
+        # Publish single state (retain=True so HA remembers state across restarts)
         state_topic = f"thread/{device_id}/{object_id}/state"
-        result = self.client.publish(state_topic, payload, qos=1, retain=False)
+        logger.info(f"Publishing state: {state_topic} = {payload}")
+        result = self.client.publish(state_topic, payload, qos=1, retain=True)
 
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             logger.error(f"Failed to publish state: {result.rc}")
