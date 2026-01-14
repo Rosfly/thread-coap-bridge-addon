@@ -159,7 +159,7 @@ class CoAPClient:
                 del self.observations[obs_key]
 
     async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
-                           registry=None, offline_threshold=5):
+                           registry=None, offline_threshold=5, stop_after_offline=30):
         """
         Poll a resource periodically with failure tracking.
 
@@ -170,12 +170,15 @@ class CoAPClient:
             interval: Polling interval in seconds
             registry: DeviceRegistry instance for updating last_seen
             offline_threshold: Number of consecutive failures before marking offline
+            stop_after_offline: Stop polling after this many failures beyond offline threshold
+                               (let discovery find device with potentially new IP)
         """
         logger.info(f"Starting polling: {device_id} - coap://[{ipv6_addr}]{uri_path} "
                     f"(interval: {interval}s, offline_threshold: {offline_threshold})")
 
         consecutive_failures = 0
         device_is_online = True
+        max_failures = offline_threshold + stop_after_offline  # Stop polling after this many total failures
 
         while self.running:
             try:
@@ -229,6 +232,12 @@ class CoAPClient:
                         if registry:
                             await registry.mark_device_offline(device_id)
 
+                    # Stop polling after too many failures - let discovery find device again
+                    if consecutive_failures >= max_failures:
+                        logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures. "
+                                   f"Discovery will find device if it comes back online.")
+                        break
+
                 await asyncio.sleep(interval)
 
             except asyncio.CancelledError:
@@ -240,6 +249,11 @@ class CoAPClient:
 
                 if registry:
                     await registry.update_device_failure(device_id, failed=True)
+
+                # Also check max failures on exceptions
+                if consecutive_failures >= max_failures:
+                    logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures.")
+                    break
 
                 await asyncio.sleep(interval)
 
