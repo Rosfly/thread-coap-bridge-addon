@@ -5,10 +5,66 @@ A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to 
 ## Features
 
 - Automatic device discovery via CoAP multicast
-- Real-time state updates using CoAP Observe
+- Real-time state updates using CoAP polling
 - MQTT Discovery integration (devices appear automatically in HA)
 - Support for lights, switches, sensors, and battery monitoring
 - Multi-architecture support (amd64, aarch64, armv7)
+- **Robust offline detection** with configurable thresholds
+- **Automatic device cleanup** for long-offline devices
+- **Automatic re-discovery** when devices return online
+
+## Recent Changes (v0.1.0)
+
+### Robustness Improvements
+
+The bridge now handles device disconnection and reconnection gracefully:
+
+#### Offline Detection
+- Tracks consecutive poll failures per device
+- Marks device as **offline** in Home Assistant after 5 consecutive failures (~1 minute)
+- Publishes MQTT availability="offline" so HA shows "Unavailable"
+
+#### Polling Behavior
+- Stops polling after 35 consecutive failures (5 offline threshold + 30 extra)
+- Removes device from discovery cache to allow re-registration
+- Discovery continues to run and will find the device when it returns
+
+#### Device Cleanup
+- Background task runs hourly to clean up stale devices
+- Removes devices offline for >24 hours (configurable)
+- Publishes empty MQTT discovery configs to remove from HA UI
+
+#### Configuration Options
+
+New options in add-on configuration:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `offline_threshold_polls` | 5 | Failures before marking offline |
+| `cleanup_after_hours` | 24 | Hours offline before removal |
+| `cleanup_check_interval` | 3600 | Seconds between cleanup checks |
+
+### Key Bug Fixes
+
+1. **Device Re-discovery Bug** (Critical)
+   - Fixed: Devices returning online were not being re-registered
+   - Cause: `discovered_addresses` set was never cleared after device went offline
+   - Solution: Added `forget_device()` method called when polling stops after max failures
+
+2. **Database Schema Update**
+   - Added `consecutive_failures` and `is_online` columns
+   - Old databases are automatically deleted on first run with new schema
+
+### How Device Recovery Works
+
+1. **Device goes offline** (moved out of range, powered off)
+2. **Polling fails** 5 times -> device marked "Unavailable" in HA
+3. **Polling continues** for 30 more attempts, then stops
+4. **Device removed** from `discovered_addresses` set
+5. **Device returns** online (rejoins Thread network)
+6. **Multicast discovery** finds device (within 60 seconds)
+7. **Device re-registered** and polling resumes
+8. **HA shows device** as online again
 
 ## Development
 

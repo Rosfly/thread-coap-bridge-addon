@@ -128,12 +128,12 @@ class MQTTPublisher:
         # Add component-specific configuration
         if component == "light":
             payload["command_topic"] = command_topic
-            payload["payload_on"] = json.dumps({"led_id": 0, "state": 1})
-            payload["payload_off"] = json.dumps({"led_id": 0, "state": 0})
-            payload["state_on"] = "1"
-            payload["state_off"] = "0"
+            # Use basic schema (not JSON) - simpler state handling
+            # State: "ON" or "OFF" as strings
+            payload["payload_on"] = "ON"
+            payload["payload_off"] = "OFF"
+            payload["state_value_template"] = "{{ 'ON' if value == '1' else 'OFF' }}"
             payload["optimistic"] = False
-            payload["schema"] = "json"
 
         elif component == "binary_sensor":
             # Firmware uses gpio_pin_get_dt() which handles GPIO_ACTIVE_LOW automatically

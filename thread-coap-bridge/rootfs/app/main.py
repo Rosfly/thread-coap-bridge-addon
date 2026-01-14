@@ -281,14 +281,11 @@ class CoAPBridgeService:
     def _translate_mqtt_to_coap(self, resource, mqtt_payload):
         """Translate Home Assistant MQTT payload to device CoAP format."""
         try:
-            # Parse MQTT JSON payload
-            mqtt_data = json.loads(mqtt_payload)
-
             # Handle LED resource
             if resource == "led":
-                # Home Assistant sends: {"state": "ON"} or {"state": "OFF"}
+                # Home Assistant sends: "ON" or "OFF" (basic schema, no JSON)
                 # Device expects: {"led_id": 0, "state": 1} where 0=OFF, 1=ON, 2=TOGGLE
-                state_str = mqtt_data.get("state", "OFF").upper()
+                state_str = mqtt_payload.strip().upper()
 
                 if state_str == "ON":
                     state_num = 1
@@ -302,12 +299,12 @@ class CoAPBridgeService:
 
                 return {"led_id": 0, "state": state_num}
 
-            # For other resources, pass through as-is
-            return mqtt_payload
+            # For other resources, try to parse as JSON first, else pass through
+            try:
+                return json.loads(mqtt_payload)
+            except json.JSONDecodeError:
+                return mqtt_payload
 
-        except json.JSONDecodeError:
-            logger.error(f"Invalid JSON payload: {mqtt_payload}")
-            return None
         except Exception as e:
             logger.error(f"Error translating MQTT to CoAP: {e}")
             return None
