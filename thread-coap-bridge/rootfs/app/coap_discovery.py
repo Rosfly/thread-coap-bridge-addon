@@ -202,6 +202,19 @@ class CoAPDiscovery:
                 logger.error(f"Discovery loop error: {e}")
                 await asyncio.sleep(interval)
 
+    def forget_device(self, ipv6_addr):
+        """
+        Remove device from discovered set to allow re-registration.
+
+        Call this when polling stops after max failures so the device
+        can be rediscovered when it comes back online.
+        """
+        if ipv6_addr in self.discovered_addresses:
+            self.discovered_addresses.discard(ipv6_addr)
+            logger.info(f"Removed {ipv6_addr} from discovered addresses (will be re-registered on next discovery)")
+        else:
+            logger.debug(f"Address {ipv6_addr} was not in discovered set")
+
     async def shutdown(self):
         """Cleanup and close CoAP context."""
         if self.context:

@@ -159,7 +159,8 @@ class CoAPClient:
                 del self.observations[obs_key]
 
     async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
-                           registry=None, offline_threshold=5, stop_after_offline=30):
+                           registry=None, offline_threshold=5, stop_after_offline=30,
+                           discovery=None):
         """
         Poll a resource periodically with failure tracking.
 
@@ -172,6 +173,7 @@ class CoAPClient:
             offline_threshold: Number of consecutive failures before marking offline
             stop_after_offline: Stop polling after this many failures beyond offline threshold
                                (let discovery find device with potentially new IP)
+            discovery: CoAPDiscovery instance to call forget_device() when polling stops
         """
         logger.info(f"Starting polling: {device_id} - coap://[{ipv6_addr}]{uri_path} "
                     f"(interval: {interval}s, offline_threshold: {offline_threshold})")
@@ -236,6 +238,9 @@ class CoAPClient:
                     if consecutive_failures >= max_failures:
                         logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures. "
                                    f"Discovery will find device if it comes back online.")
+                        # Remove from discovered_addresses so it can be re-registered
+                        if discovery:
+                            discovery.forget_device(ipv6_addr)
                         break
 
                 await asyncio.sleep(interval)
@@ -253,6 +258,9 @@ class CoAPClient:
                 # Also check max failures on exceptions
                 if consecutive_failures >= max_failures:
                     logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures.")
+                    # Remove from discovered_addresses so it can be re-registered
+                    if discovery:
+                        discovery.forget_device(ipv6_addr)
                     break
 
                 await asyncio.sleep(interval)

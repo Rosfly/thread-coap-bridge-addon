@@ -209,7 +209,8 @@ class CoAPBridgeService:
                                     resource.uri_path,
                                     interval=5,
                                     registry=self.registry,
-                                    offline_threshold=offline_threshold
+                                    offline_threshold=offline_threshold,
+                                    discovery=self.discovery
                                 ),
                                 name=f"poll_{device.device_id}_{resource.uri_path}"
                             )
