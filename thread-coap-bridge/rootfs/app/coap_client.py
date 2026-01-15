@@ -160,7 +160,7 @@ class CoAPClient:
 
     async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
                            registry=None, offline_threshold=5, stop_after_offline=30,
-                           discovery=None):
+                           discovery=None, state_filter=None):
         """
         Poll a resource periodically with failure tracking.
 
@@ -174,6 +174,8 @@ class CoAPClient:
             stop_after_offline: Stop polling after this many failures beyond offline threshold
                                (let discovery find device with potentially new IP)
             discovery: CoAPDiscovery instance to call forget_device() when polling stops
+            state_filter: Optional callback(device_id, resource, state_value) -> bool
+                         Returns True if state should be published, False to suppress
         """
         logger.info(f"Starting polling: {device_id} - coap://[{ipv6_addr}]{uri_path} "
                     f"(interval: {interval}s, offline_threshold: {offline_threshold})")
@@ -209,7 +211,16 @@ class CoAPClient:
                     except json.JSONDecodeError:
                         state_value = payload
 
-                    self.mqtt.publish_state(device_id, uri_path, state_value)
+                    # Check if state should be published (may be suppressed after recent command)
+                    resource = uri_path.strip('/')
+                    should_publish = True
+                    if state_filter:
+                        should_publish = state_filter(device_id, resource, state_value)
+
+                    if should_publish:
+                        self.mqtt.publish_state(device_id, uri_path, state_value)
+                    else:
+                        logger.debug(f"State update suppressed for {device_id}/{resource} (recent command)")
 
                 else:
                     # Failure - increment counter

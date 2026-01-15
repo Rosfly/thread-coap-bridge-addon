@@ -159,7 +159,7 @@ class MQTTPublisher:
         """Publish device state update."""
         object_id = resource_uri.strip('/')
 
-        logger.debug(f"Publishing state: {state_value}")
+        logger.info(f"publish_state called: device={device_id}, uri={resource_uri}, value={state_value} (type={type(state_value).__name__})")
 
         # Handle different state value types
         if isinstance(state_value, dict):

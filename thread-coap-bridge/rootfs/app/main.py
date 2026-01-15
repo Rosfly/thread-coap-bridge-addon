@@ -9,6 +9,7 @@ import signal
 import sys
 import logging
 import json
+import time
 from config_handler import ConfigHandler
 from device_registry import DeviceRegistry
 from mqtt_publisher import MQTTPublisher
@@ -33,6 +34,11 @@ class CoAPBridgeService:
 
         # Background tasks
         self.tasks = []
+
+        # Track recent commands to suppress poll updates temporarily
+        # Format: {(device_id, resource): (timestamp, expected_state)}
+        self.recent_commands = {}
+        self.command_suppress_time = 10  # Seconds to suppress poll updates after command
 
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
@@ -210,7 +216,8 @@ class CoAPBridgeService:
                                     interval=5,
                                     registry=self.registry,
                                     offline_threshold=offline_threshold,
-                                    discovery=self.discovery
+                                    discovery=self.discovery,
+                                    state_filter=self._should_publish_state
                                 ),
                                 name=f"poll_{device.device_id}_{resource.uri_path}"
                             )
@@ -278,6 +285,40 @@ class CoAPBridgeService:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
 
+    def _should_publish_state(self, device_id, resource, state_value):
+        """
+        Check if a polled state should be published to MQTT.
+        Returns False to suppress updates shortly after a user command (prevents UI flickering).
+        """
+        key = (device_id, resource)
+        if key in self.recent_commands:
+            cmd_time, expected_state = self.recent_commands[key]
+            elapsed = time.time() - cmd_time
+
+            if elapsed < self.command_suppress_time:
+                # Still within suppression window - check if state matches expected
+                actual_state = None
+                if isinstance(state_value, dict) and 'state' in state_value:
+                    actual_state = state_value['state']
+
+                if actual_state == expected_state:
+                    # Device has confirmed the expected state - clear suppression
+                    logger.info(f"Device confirmed state {expected_state} for {device_id}/{resource}")
+                    del self.recent_commands[key]
+                    return True
+                else:
+                    # State doesn't match yet - suppress this update
+                    logger.debug(f"Suppressing poll update for {device_id}/{resource} "
+                                f"(expected={expected_state}, actual={actual_state}, elapsed={elapsed:.1f}s)")
+                    return False
+            else:
+                # Suppression window expired - publish real state and clear
+                logger.info(f"Command suppression expired for {device_id}/{resource}, publishing real state")
+                del self.recent_commands[key]
+                return True
+
+        return True
+
     def _translate_mqtt_to_coap(self, resource, mqtt_payload):
         """Translate Home Assistant MQTT payload to device CoAP format."""
         try:
@@ -330,6 +371,16 @@ class CoAPBridgeService:
                 logger.warning(f"Could not translate MQTT payload: {payload}")
                 return
 
+            # For LED commands, immediately publish expected state (optimistic update)
+            # This prevents UI flickering while waiting for device response
+            if resource == "led" and isinstance(coap_payload, dict) and 'state' in coap_payload:
+                expected_state = coap_payload['state']
+                # Record this command to suppress poll updates temporarily
+                self.recent_commands[(device_id, resource)] = (time.time(), expected_state)
+                # Immediately publish expected state to MQTT
+                self.mqtt.publish_state(device_id, uri_path, {'state': expected_state})
+                logger.info(f"Published optimistic state for {device_id}/{resource}: {expected_state}")
+
             # Send CoAP PUT request
             success = await self.coap_client.put_resource(
                 device.ipv6_address,
@@ -339,18 +390,12 @@ class CoAPBridgeService:
 
             if success:
                 logger.info(f"Successfully sent command to {device_id}{uri_path}")
-
-                # Read back the state to update MQTT
-                response = await self.coap_client.get_resource(device.ipv6_address, uri_path)
-                if response:
-                    try:
-                        state_value = json.loads(response)
-                    except json.JSONDecodeError:
-                        state_value = response
-
-                    self.mqtt.publish_state(device_id, uri_path, state_value)
+                # Don't read back immediately - let the suppression window handle it
+                # The next poll cycle after suppression will get the real state
             else:
                 logger.warning(f"Failed to send command to {device_id}{uri_path}")
+                # Command failed - clear the suppression so poll can update with real state
+                self.recent_commands.pop((device_id, resource), None)
 
         except Exception as e:
             logger.error(f"Error handling MQTT command: {e}")
