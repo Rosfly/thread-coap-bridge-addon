@@ -176,11 +176,17 @@ class MQTTPublisher:
                         logger.error(f"Failed to publish button state: {result.rc}")
                 return  # Done - published all buttons
 
-            # For LED/single state resources
+            # For LED array response: {"device_id": "...", "leds": [{"led_id": 0, "state": 1}]}
+            elif 'leds' in state_value and len(state_value['leds']) > 0:
+                led_state = state_value['leds'][0].get('state', 0)
+                payload = str(led_state)
+                logger.info(f"LED state extracted from array: {led_state} -> payload='{payload}'")
+
+            # For simple state response: {"state": 1}
             elif 'state' in state_value:
                 state_val = state_value['state']
                 payload = str(state_val)
-                logger.info(f"LED state extracted: {state_val} (type={type(state_val).__name__}) -> payload='{payload}'")
+                logger.info(f"LED state extracted: {state_val} -> payload='{payload}'")
             else:
                 payload = json.dumps(state_value)
         else:

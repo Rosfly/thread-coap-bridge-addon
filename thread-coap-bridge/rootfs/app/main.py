@@ -285,6 +285,17 @@ class CoAPBridgeService:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
 
+    def _extract_led_state(self, state_value):
+        """Extract LED state from various response formats."""
+        if isinstance(state_value, dict):
+            # Format: {"leds": [{"led_id": 0, "state": 1}]}
+            if 'leds' in state_value and len(state_value['leds']) > 0:
+                return state_value['leds'][0].get('state')
+            # Format: {"state": 1}
+            if 'state' in state_value:
+                return state_value['state']
+        return None
+
     def _should_publish_state(self, device_id, resource, state_value):
         """
         Check if a polled state should be published to MQTT.
@@ -297,9 +308,7 @@ class CoAPBridgeService:
 
             if elapsed < self.command_suppress_time:
                 # Still within suppression window - check if state matches expected
-                actual_state = None
-                if isinstance(state_value, dict) and 'state' in state_value:
-                    actual_state = state_value['state']
+                actual_state = self._extract_led_state(state_value)
 
                 if actual_state == expected_state:
                     # Device has confirmed the expected state - clear suppression
