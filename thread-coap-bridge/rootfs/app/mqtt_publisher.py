@@ -178,7 +178,9 @@ class MQTTPublisher:
 
             # For LED/single state resources
             elif 'state' in state_value:
-                payload = str(state_value['state'])
+                state_val = state_value['state']
+                payload = str(state_val)
+                logger.info(f"LED state extracted: {state_val} (type={type(state_val).__name__}) -> payload='{payload}'")
             else:
                 payload = json.dumps(state_value)
         else:
