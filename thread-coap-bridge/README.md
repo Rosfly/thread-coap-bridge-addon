@@ -13,11 +13,50 @@ A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to 
 - **Automatic device cleanup** for long-offline devices
 - **Automatic re-discovery** when devices return online
 
-## Recent Changes (v0.1.0)
+## Recent Changes (v0.2.0)
 
-### Robustness Improvements
+### LED State Display Fix
 
-The bridge now handles device disconnection and reconnection gracefully:
+Fixed critical issue where LED state was not being displayed correctly in Home Assistant UI.
+
+#### Problem
+The LED would show "unknown" or wrong state in HA even though the device was responding correctly.
+
+#### Root Causes & Solutions
+
+1. **MQTT Discovery Schema Mismatch**
+   - Problem: Discovery used `"schema": "json"` which expects `{"state": "ON"}`, but bridge published `"1"` or `"0"`
+   - Solution: Switched to basic light schema with `state_value_template`:
+     ```python
+     payload["state_value_template"] = "{{ 'ON' if value == '1' else 'OFF' }}"
+     ```
+
+2. **Device Response Format**
+   - Problem: Expected `{"state": 1}` but device returns `{"leds": [{"led_id": 0, "state": 1}]}`
+   - Solution: Updated `publish_state()` to extract state from nested array:
+     ```python
+     if 'leds' in state_value and len(state_value['leds']) > 0:
+         led_state = state_value['leds'][0].get('state', 0)
+         payload = str(led_state)
+     ```
+
+3. **UI Flickering After Commands**
+   - Problem: User toggles LED -> UI shows new state -> poll returns old state -> UI flickers back
+   - Solution: Implemented optimistic updates with suppression window:
+     - Immediately publish expected state when command is sent
+     - Suppress poll updates for 10 seconds after command
+     - Clear suppression when device confirms expected state or timeout expires
+
+#### MQTT State Publishing
+
+States are now published with `retain=True` so Home Assistant remembers state across restarts:
+```python
+self.client.publish(state_topic, payload, qos=1, retain=True)
+```
+
+### Robustness Improvements (v0.1.0)
+
+The bridge handles device disconnection and reconnection gracefully:
 
 #### Offline Detection
 - Tracks consecutive poll failures per device
@@ -36,8 +75,6 @@ The bridge now handles device disconnection and reconnection gracefully:
 
 #### Configuration Options
 
-New options in add-on configuration:
-
 | Option | Default | Description |
 |--------|---------|-------------|
 | `offline_threshold_polls` | 5 | Failures before marking offline |
@@ -51,7 +88,17 @@ New options in add-on configuration:
    - Cause: `discovered_addresses` set was never cleared after device went offline
    - Solution: Added `forget_device()` method called when polling stops after max failures
 
-2. **Database Schema Update**
+2. **LED State Not Showing** (Critical)
+   - Fixed: LED state showing "unknown" in HA UI
+   - Cause: Multiple issues - wrong MQTT schema, wrong JSON format parsing, no state retention
+   - Solution: Comprehensive fix to MQTT discovery, state extraction, and retention
+
+3. **Command Translation**
+   - Fixed: Commands from HA not being translated correctly to device format
+   - Cause: HA sends "ON"/"OFF" strings, device expects `{"led_id": 0, "state": 1}`
+   - Solution: `_translate_mqtt_to_coap()` now handles both JSON and plain text formats
+
+4. **Database Schema Update**
    - Added `consecutive_failures` and `is_online` columns
    - Old databases are automatically deleted on first run with new schema
 
@@ -65,6 +112,35 @@ New options in add-on configuration:
 6. **Multicast discovery** finds device (within 60 seconds)
 7. **Device re-registered** and polling resumes
 8. **HA shows device** as online again
+
+## Lessons Learned
+
+### MQTT Discovery for Lights
+
+Home Assistant MQTT lights support multiple schemas. For simple ON/OFF lights:
+- **Don't use JSON schema** unless you want to publish `{"state": "ON"}`
+- Use **basic schema** with `state_value_template` to convert device values
+- Always set `retain=True` for state topics
+
+### Device Response Formats
+
+CoAP devices may return complex nested JSON. Always log the actual response format:
+```python
+logger.info(f"publish_state called: device={device_id}, uri={resource_uri}, value={state_value}")
+```
+
+### Optimistic Updates
+
+For responsive UI, publish the expected state immediately when a command is sent, then verify with the next poll. This prevents the "springback" effect where the UI briefly shows the old state.
+
+### State Extraction
+
+Handle multiple response formats for robustness:
+```python
+# Format 1: {"leds": [{"led_id": 0, "state": 1}]}
+# Format 2: {"state": 1}
+# Format 3: "1"
+```
 
 ## Development
 
