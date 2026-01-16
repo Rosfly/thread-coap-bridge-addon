@@ -141,6 +141,9 @@ class CoAPBridgeService:
             try:
                 logger.debug("Running device discovery...")
                 await self.discovery.discover_devices()
+                # Also try unicast rediscovery for known offline devices
+                # This bypasses broken aiocoap multicast on Thread/wpan0
+                await self.discovery.rediscover_offline_devices(self.registry)
                 await asyncio.sleep(interval)
             except Exception as e:
                 logger.error(f"Error in discovery loop: {e}")

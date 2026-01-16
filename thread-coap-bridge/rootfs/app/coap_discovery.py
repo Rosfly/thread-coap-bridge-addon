@@ -215,6 +215,42 @@ class CoAPDiscovery:
         else:
             logger.debug(f"Address {ipv6_addr} was not in discovered set")
 
+    async def rediscover_offline_devices(self, registry):
+        """
+        Attempt unicast rediscovery of known offline devices.
+
+        This bypasses broken multicast by directly probing devices
+        at their last-known IPv6 address. SLAAC addresses are stable
+        across Thread reconnections (based on EUI-64).
+        """
+        try:
+            devices = await registry.get_offline_devices()
+
+            if not devices:
+                return
+
+            logger.debug(f"Attempting unicast rediscovery of {len(devices)} offline device(s)")
+
+            for device in devices:
+                ipv6 = device.ipv6_address
+
+                # Skip if we've already rediscovered this address this cycle
+                if ipv6 in self.discovered_addresses:
+                    continue
+
+                logger.debug(f"Probing {device.device_id} at {ipv6}")
+
+                # Use existing unicast query method
+                resources = await self.query_device_resources(ipv6)
+
+                if resources:
+                    logger.info(f"Re-discovered offline device {device.device_id} at {ipv6}")
+                    self.discovered_addresses.add(ipv6)
+                    await self.registry.register_device(ipv6, resources=resources)
+
+        except Exception as e:
+            logger.error(f"Unicast rediscovery error: {e}")
+
     async def shutdown(self):
         """Cleanup and close CoAP context."""
         if self.context:

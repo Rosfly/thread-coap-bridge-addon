@@ -245,6 +245,10 @@ class CoAPClient:
                         if registry:
                             await registry.mark_device_offline(device_id)
 
+                        # Allow re-discovery immediately (don't wait for max_failures)
+                        if discovery:
+                            discovery.forget_device(ipv6_addr)
+
                     # Stop polling after too many failures - let discovery find device again
                     if consecutive_failures >= max_failures:
                         logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures. "

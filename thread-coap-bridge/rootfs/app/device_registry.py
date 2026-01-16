@@ -310,6 +310,38 @@ class DeviceRegistry:
         except Exception as e:
             logger.error(f"Error marking device offline: {e}")
 
+    async def get_offline_devices(self):
+        """
+        Get devices that are offline but still in database (not yet cleaned up).
+        These are candidates for unicast re-discovery.
+        """
+        try:
+            async with self.connection.cursor() as cursor:
+                await cursor.execute('''
+                    SELECT device_id, ipv6_address, eui64, last_seen, commissioned
+                    FROM devices
+                    WHERE is_online = 0 AND commissioned = 1
+                ''')
+
+                rows = await cursor.fetchall()
+
+                devices = []
+                for row in rows:
+                    device = Device(
+                        device_id=row[0],
+                        ipv6_address=row[1],
+                        eui64=row[2],
+                        last_seen=datetime.fromisoformat(row[3]) if row[3] else None,
+                        commissioned=bool(row[4])
+                    )
+                    devices.append(device)
+
+                return devices
+
+        except Exception as e:
+            logger.error(f"Error getting offline devices: {e}")
+            return []
+
     async def get_devices_for_cleanup(self, offline_hours=24):
         """
         Get devices that have been offline for more than specified hours.
