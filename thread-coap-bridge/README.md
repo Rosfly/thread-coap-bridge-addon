@@ -13,6 +13,34 @@ A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to 
 - **Automatic device cleanup** for long-offline devices
 - **Automatic re-discovery** when devices return online
 
+## Recent Changes (v0.3.0)
+
+### Unicast Re-Discovery Fix
+
+Fixed critical issue where devices could not be re-discovered after extended disconnection (~15+ minutes).
+
+#### Problem
+After a device went offline for extended period and returned, multicast discovery failed to find it. The device stayed "Unavailable" in Home Assistant indefinitely.
+
+#### Root Cause
+The aiocoap library has a known limitation with multicast on Thread/wpan0 interfaces - it falls back to broken unicast behavior with the warning: `"Sending request to multicast via unicast request method"`. This means multicast discovery was never truly reliable.
+
+#### Solution
+Added **unicast re-discovery** that probes known offline devices directly:
+
+1. When a device is marked offline (5 failures), its IP is removed from the discovery cache
+2. Every discovery cycle (60s), the bridge queries offline devices via **unicast CoAP GET** to their last-known IPv6
+3. Since SLAAC addresses (based on EUI-64) are stable across Thread reconnections, this reliably finds returning devices
+4. Device is re-registered and polling resumes automatically
+
+#### New Files/Methods
+- `device_registry.py`: Added `get_offline_devices()` - queries devices where `is_online=0`
+- `coap_discovery.py`: Added `rediscover_offline_devices()` - probes offline devices via unicast
+- `main.py`: Discovery loop now calls both multicast and unicast re-discovery
+- `coap_client.py`: Calls `forget_device()` when marking offline (not just at max_failures)
+
+---
+
 ## Recent Changes (v0.2.0)
 
 ### LED State Display Fix
@@ -106,12 +134,15 @@ The bridge handles device disconnection and reconnection gracefully:
 
 1. **Device goes offline** (moved out of range, powered off)
 2. **Polling fails** 5 times -> device marked "Unavailable" in HA
-3. **Polling continues** for 30 more attempts, then stops
-4. **Device removed** from `discovered_addresses` set
+3. **Device removed** from `discovered_addresses` set immediately (allows re-discovery)
+4. **Polling continues** for 30 more attempts, then stops
 5. **Device returns** online (rejoins Thread network)
-6. **Multicast discovery** finds device (within 60 seconds)
-7. **Device re-registered** and polling resumes
-8. **HA shows device** as online again
+6. **Unicast re-discovery** probes last-known IPv6 (every 60 seconds)
+7. **Device responds** to unicast GET `/.well-known/core`
+8. **Device re-registered** and polling resumes
+9. **HA shows device** as online again
+
+**Note:** Multicast discovery is unreliable on Thread/wpan0 due to aiocoap limitations. The unicast re-discovery mechanism ensures devices are found reliably after extended disconnection.
 
 ## Lessons Learned
 
@@ -242,10 +273,10 @@ python3 main.py
 
 ```
 rootfs/app/
-├── main.py              # Entry point, orchestration
+├── main.py              # Entry point, orchestration, discovery loop
 ├── config_handler.py    # Parse HA add-on configuration
-├── coap_discovery.py    # Multicast discovery, parse /.well-known/core
-├── coap_client.py       # CoAP GET/PUT/Observe operations
+├── coap_discovery.py    # Multicast + unicast discovery, parse /.well-known/core
+├── coap_client.py       # CoAP GET/PUT/Observe operations, failure tracking
 ├── mqtt_publisher.py    # MQTT Discovery, state publishing
 ├── device_registry.py   # SQLite database for device management
 └── models.py            # Data models (Device, Resource)

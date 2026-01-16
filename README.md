@@ -9,10 +9,11 @@ Home Assistant add-on repository for Thread/CoAP integration.
 Bridge CoAP devices on Thread networks to Home Assistant via MQTT Discovery.
 
 **Features:**
-- Automatic device discovery via CoAP multicast
-- Real-time state updates with CoAP Observe
-- MQTT Discovery integration
+- Automatic device discovery via CoAP multicast + unicast re-discovery
+- Real-time state updates via CoAP polling
+- MQTT Discovery integration (devices appear automatically in HA)
 - Support for lights, switches, sensors, and battery monitoring
+- Robust offline/online handling with automatic re-discovery
 
 **Documentation:** See [thread-coap-bridge/DOCS.md](thread-coap-bridge/DOCS.md)
 
