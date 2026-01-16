@@ -145,6 +145,9 @@ class MQTTPublisher:
 
         elif component == "sensor":
             payload["unit_of_measurement"] = self._get_unit_for_sensor(resource_type)
+            # Convert millivolts to volts for voltage sensors
+            if resource_type.lower() == "voltage":
+                payload["value_template"] = "{{ value | float / 1000 }}"
 
         # Publish discovery message with retain flag
         payload_json = json.dumps(payload)
@@ -187,6 +190,11 @@ class MQTTPublisher:
                 state_val = state_value['state']
                 payload = str(state_val)
                 logger.info(f"LED state extracted: {state_val} -> payload='{payload}'")
+
+            # For simple value response: {"device_id": "...", "value": 70}
+            elif 'value' in state_value:
+                payload = str(state_value['value'])
+                logger.info(f"Value extracted: {state_value['value']} -> payload='{payload}'")
             else:
                 payload = json.dumps(state_value)
         else:
