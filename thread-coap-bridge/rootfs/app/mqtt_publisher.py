@@ -145,9 +145,9 @@ class MQTTPublisher:
 
         elif component == "sensor":
             payload["unit_of_measurement"] = self._get_unit_for_sensor(resource_type)
-            # Convert millivolts to volts for voltage sensors
+            # Convert millivolts to volts for voltage sensors (format: 3.80V)
             if resource_type.lower() == "voltage":
-                payload["value_template"] = "{{ value | float / 1000 }}"
+                payload["value_template"] = "{{ '%.2f' | format(value | float / 1000) }}"
 
         # Publish discovery message with retain flag
         payload_json = json.dumps(payload)
