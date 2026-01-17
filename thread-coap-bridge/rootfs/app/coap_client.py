@@ -106,10 +106,19 @@ class CoAPClient:
             logger.error(f"PUT error for {ipv6_addr}{uri_path}: {e}")
             return False
 
-    async def observe_resource(self, device_id, ipv6_addr, uri_path):
+    async def observe_resource(self, device_id, ipv6_addr, uri_path,
+                               registry=None, offline_threshold=5, discovery=None):
         """
-        Start CoAP Observe on a resource.
+        Start CoAP Observe on a resource with automatic reconnection.
         Automatically publishes updates to MQTT.
+
+        Args:
+            device_id: Device identifier
+            ipv6_addr: IPv6 address
+            uri_path: CoAP URI path
+            registry: DeviceRegistry instance for updating last_seen
+            offline_threshold: Number of consecutive failures before marking offline
+            discovery: CoAPDiscovery instance to call forget_device() when observe stops
         """
         logger.info(f"Starting observation: {device_id} - coap://[{ipv6_addr}]{uri_path}")
 
@@ -117,46 +126,123 @@ class CoAPClient:
             logger.error("CoAP context not initialized")
             return
 
-        try:
-            uri = f'coap://[{ipv6_addr}]{uri_path}'
-            request = Message(code=GET, uri=uri, observe=0)
+        obs_key = f"{device_id}{uri_path}"
+        consecutive_failures = 0
+        device_is_online = True
+        max_reconnect_attempts = 10
 
-            # Start observation
-            observation_request = self.context.request(request)
+        while self.running and consecutive_failures < max_reconnect_attempts:
+            try:
+                uri = f'coap://[{ipv6_addr}]{uri_path}'
+                request = Message(code=GET, uri=uri, observe=0)
 
-            # Store observation so we can cancel it later
-            obs_key = f"{device_id}{uri_path}"
-            self.observations[obs_key] = observation_request
+                # Start observation
+                observation_request = self.context.request(request)
 
-            # Process observation responses
-            async for response in observation_request.observation:
-                if not self.running:
-                    break
+                # Store observation so we can cancel it later
+                self.observations[obs_key] = observation_request
 
-                if response.code.is_successful():
-                    payload = response.payload.decode('utf-8')
-                    logger.debug(f"Observe update from {device_id}{uri_path}: {payload}")
+                # Wait for initial response (with timeout)
+                try:
+                    initial_response = await asyncio.wait_for(
+                        observation_request.response,
+                        timeout=15.0
+                    )
 
-                    # Try to parse as JSON
-                    try:
-                        state_value = json.loads(payload)
-                    except json.JSONDecodeError:
-                        state_value = payload
+                    if initial_response.code.is_successful():
+                        # Successfully established observation
+                        consecutive_failures = 0
 
-                    # Publish state to MQTT
-                    self.mqtt.publish_state(device_id, uri_path, state_value)
-                else:
-                    logger.warning(f"Observe response error: {response.code}")
+                        if registry:
+                            await registry.update_device_failure(device_id, failed=False)
 
-        except asyncio.CancelledError:
-            logger.info(f"Observation cancelled for {device_id}{uri_path}")
-        except Exception as e:
-            logger.error(f"Observe error for {device_id}{uri_path}: {e}")
-        finally:
-            # Clean up observation
-            obs_key = f"{device_id}{uri_path}"
-            if obs_key in self.observations:
-                del self.observations[obs_key]
+                        if not device_is_online:
+                            logger.info(f"Device {device_id} back online (observe)")
+                            self.mqtt.publish_availability(device_id, available=True)
+                            device_is_online = True
+
+                        # Process initial response
+                        payload = initial_response.payload.decode('utf-8').rstrip('\x00')
+                        logger.info(f"Observe established for {device_id}{uri_path}")
+                        try:
+                            state_value = json.loads(payload)
+                        except json.JSONDecodeError:
+                            state_value = payload
+                        self.mqtt.publish_state(device_id, uri_path, state_value)
+
+                    else:
+                        logger.warning(f"Observe registration failed: {initial_response.code}")
+                        consecutive_failures += 1
+                        await asyncio.sleep(5)
+                        continue
+
+                except asyncio.TimeoutError:
+                    logger.warning(f"Observe registration timeout for {device_id}{uri_path}")
+                    consecutive_failures += 1
+
+                    if consecutive_failures >= offline_threshold and device_is_online:
+                        logger.warning(f"Device {device_id} marked offline (observe timeout)")
+                        self.mqtt.publish_availability(device_id, available=False)
+                        device_is_online = False
+                        if registry:
+                            await registry.mark_device_offline(device_id)
+
+                    await asyncio.sleep(10)
+                    continue
+
+                # Process observation notifications
+                async for response in observation_request.observation:
+                    if not self.running:
+                        break
+
+                    if response.code.is_successful():
+                        payload = response.payload.decode('utf-8').rstrip('\x00')
+                        logger.debug(f"Observe notification from {device_id}{uri_path}: {payload}")
+
+                        # Reset failure counter on successful notification
+                        consecutive_failures = 0
+                        if registry:
+                            await registry.update_device_failure(device_id, failed=False)
+
+                        # Try to parse as JSON
+                        try:
+                            state_value = json.loads(payload)
+                        except json.JSONDecodeError:
+                            state_value = payload
+
+                        # Publish state to MQTT
+                        self.mqtt.publish_state(device_id, uri_path, state_value)
+                    else:
+                        logger.warning(f"Observe notification error: {response.code}")
+
+                # Observation ended normally - try to re-establish
+                logger.info(f"Observe stream ended for {device_id}{uri_path}, re-establishing...")
+                await asyncio.sleep(2)
+
+            except asyncio.CancelledError:
+                logger.info(f"Observation cancelled for {device_id}{uri_path}")
+                break
+            except Exception as e:
+                logger.error(f"Observe error for {device_id}{uri_path}: {e}")
+                consecutive_failures += 1
+
+                if consecutive_failures >= offline_threshold and device_is_online:
+                    logger.warning(f"Device {device_id} marked offline (observe error)")
+                    self.mqtt.publish_availability(device_id, available=False)
+                    device_is_online = False
+                    if registry:
+                        await registry.mark_device_offline(device_id)
+
+                await asyncio.sleep(10)
+
+        # Cleanup
+        if obs_key in self.observations:
+            del self.observations[obs_key]
+
+        if consecutive_failures >= max_reconnect_attempts:
+            logger.warning(f"Giving up observe for {device_id}{uri_path} after {consecutive_failures} failures")
+            if discovery:
+                discovery.forget_device(ipv6_addr)
 
     async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
                            registry=None, offline_threshold=5, stop_after_offline=30,

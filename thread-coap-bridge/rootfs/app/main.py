@@ -207,24 +207,43 @@ class CoAPBridgeService:
                         self.mqtt.publish_availability(device.device_id, available=True)
 
                         # Start monitoring resources
+                        # Use Observe for LED and button (real-time updates)
+                        # Use polling for battery/voltage (slow-changing values)
                         offline_threshold = self.config.get('offline_threshold_polls', 5)
 
                         for resource in resources:
-                            # Start polling with failure tracking
-                            poll_task = asyncio.create_task(
-                                self.coap_client.poll_resource(
-                                    device.device_id,
-                                    device.ipv6_address,
-                                    resource.uri_path,
-                                    interval=5,
-                                    registry=self.registry,
-                                    offline_threshold=offline_threshold,
-                                    discovery=self.discovery,
-                                    state_filter=self._should_publish_state
-                                ),
-                                name=f"poll_{device.device_id}_{resource.uri_path}"
-                            )
-                            self.tasks.append(poll_task)
+                            if resource.resource_type in ('led', 'button'):
+                                # Use CoAP Observe for real-time updates
+                                observe_task = asyncio.create_task(
+                                    self.coap_client.observe_resource(
+                                        device.device_id,
+                                        device.ipv6_address,
+                                        resource.uri_path,
+                                        registry=self.registry,
+                                        offline_threshold=offline_threshold,
+                                        discovery=self.discovery
+                                    ),
+                                    name=f"observe_{device.device_id}_{resource.uri_path}"
+                                )
+                                self.tasks.append(observe_task)
+                                logger.info(f"Started Observe for {device.device_id}/{resource.uri_path}")
+                            else:
+                                # Use polling for battery/voltage (slow-changing)
+                                poll_task = asyncio.create_task(
+                                    self.coap_client.poll_resource(
+                                        device.device_id,
+                                        device.ipv6_address,
+                                        resource.uri_path,
+                                        interval=60,  # Poll battery every 60s
+                                        registry=self.registry,
+                                        offline_threshold=offline_threshold,
+                                        discovery=self.discovery,
+                                        state_filter=self._should_publish_state
+                                    ),
+                                    name=f"poll_{device.device_id}_{resource.uri_path}"
+                                )
+                                self.tasks.append(poll_task)
+                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path}")
 
                         # Mark as commissioned
                         await self.registry.mark_commissioned(device.device_id)
