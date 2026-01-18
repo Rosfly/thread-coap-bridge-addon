@@ -107,7 +107,8 @@ class CoAPClient:
             return False
 
     async def observe_resource(self, device_id, ipv6_addr, uri_path,
-                               registry=None, offline_threshold=5, discovery=None):
+                               registry=None, offline_threshold=5, discovery=None,
+                               reregister_interval=60):
         """
         Start CoAP Observe on a resource with automatic reconnection.
         Automatically publishes updates to MQTT.
@@ -119,6 +120,7 @@ class CoAPClient:
             registry: DeviceRegistry instance for updating last_seen
             offline_threshold: Number of consecutive failures before marking offline
             discovery: CoAPDiscovery instance to call forget_device() when observe stops
+            reregister_interval: Seconds between periodic re-registration (handles device reboots)
         """
         logger.info(f"Starting observation: {device_id} - coap://[{ipv6_addr}]{uri_path}")
 
@@ -190,33 +192,52 @@ class CoAPClient:
                     await asyncio.sleep(10)
                     continue
 
-                # Process observation notifications
-                async for response in observation_request.observation:
-                    if not self.running:
-                        break
+                # Process observation notifications with periodic re-registration timeout
+                # This handles device reboots where the device loses its observer list
+                # If no notification arrives within reregister_interval, we re-establish
+                observation_active = True
 
-                    if response.code.is_successful():
-                        payload = response.payload.decode('utf-8').rstrip('\x00')
-                        logger.debug(f"Observe notification from {device_id}{uri_path}: {payload}")
+                while observation_active and self.running:
+                    try:
+                        # Wait for next notification with timeout
+                        response = await asyncio.wait_for(
+                            observation_request.observation.__anext__(),
+                            timeout=reregister_interval
+                        )
 
-                        # Reset failure counter on successful notification
-                        consecutive_failures = 0
-                        if registry:
-                            await registry.update_device_failure(device_id, failed=False)
+                        if response.code.is_successful():
+                            payload = response.payload.decode('utf-8').rstrip('\x00')
+                            logger.debug(f"Observe notification from {device_id}{uri_path}: {payload}")
 
-                        # Try to parse as JSON
-                        try:
-                            state_value = json.loads(payload)
-                        except json.JSONDecodeError:
-                            state_value = payload
+                            # Reset failure counter on successful notification
+                            consecutive_failures = 0
+                            if registry:
+                                await registry.update_device_failure(device_id, failed=False)
 
-                        # Publish state to MQTT
-                        self.mqtt.publish_state(device_id, uri_path, state_value)
-                    else:
-                        logger.warning(f"Observe notification error: {response.code}")
+                            # Try to parse as JSON
+                            try:
+                                state_value = json.loads(payload)
+                            except json.JSONDecodeError:
+                                state_value = payload
 
-                # Observation ended normally - try to re-establish
-                logger.info(f"Observe stream ended for {device_id}{uri_path}, re-establishing...")
+                            # Publish state to MQTT
+                            self.mqtt.publish_state(device_id, uri_path, state_value)
+                        else:
+                            logger.warning(f"Observe notification error: {response.code}")
+
+                    except asyncio.TimeoutError:
+                        # No notification received within interval - re-register
+                        # This handles device reboots where observer list is lost
+                        logger.info(f"Observe keepalive timeout for {device_id}{uri_path}, re-registering...")
+                        observation_active = False
+
+                    except StopAsyncIteration:
+                        # Observation stream ended
+                        logger.info(f"Observe stream ended for {device_id}{uri_path}")
+                        observation_active = False
+
+                # Re-establish observation
+                logger.info(f"Re-establishing observe for {device_id}{uri_path}...")
                 await asyncio.sleep(2)
 
             except asyncio.CancelledError:
