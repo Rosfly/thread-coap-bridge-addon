@@ -192,18 +192,13 @@ class CoAPClient:
                     await asyncio.sleep(10)
                     continue
 
-                # Process observation notifications with periodic re-registration timeout
-                # This handles device reboots where the device loses its observer list
-                # If no notification arrives within reregister_interval, we re-establish
-                observation_active = True
-
-                while observation_active and self.running:
-                    try:
-                        # Wait for next notification with timeout
-                        response = await asyncio.wait_for(
-                            observation_request.observation.__anext__(),
-                            timeout=reregister_interval
-                        )
+                # Process observation notifications
+                # The async for loop blocks waiting for notifications from the server
+                # It only ends when: observation is cancelled, server sends deregister, or error
+                try:
+                    async for response in observation_request.observation:
+                        if not self.running:
+                            break
 
                         if response.code.is_successful():
                             payload = response.payload.decode('utf-8').rstrip('\x00')
@@ -224,21 +219,13 @@ class CoAPClient:
                             self.mqtt.publish_state(device_id, uri_path, state_value)
                         else:
                             logger.warning(f"Observe notification error: {response.code}")
+                except Exception as obs_error:
+                    logger.warning(f"Observation iteration error for {device_id}{uri_path}: {obs_error}")
 
-                    except asyncio.TimeoutError:
-                        # No notification received within interval - re-register
-                        # This handles device reboots where observer list is lost
-                        logger.info(f"Observe keepalive timeout for {device_id}{uri_path}, re-registering...")
-                        observation_active = False
-
-                    except StopAsyncIteration:
-                        # Observation stream ended
-                        logger.info(f"Observe stream ended for {device_id}{uri_path}")
-                        observation_active = False
-
-                # Re-establish observation
-                logger.info(f"Re-establishing observe for {device_id}{uri_path}...")
-                await asyncio.sleep(2)
+                # Observation stream ended - wait before re-establishing
+                # This handles device reboots where the device loses its observer list
+                logger.info(f"Observe stream ended for {device_id}{uri_path}, re-registering in {reregister_interval}s...")
+                await asyncio.sleep(reregister_interval)
 
             except asyncio.CancelledError:
                 logger.info(f"Observation cancelled for {device_id}{uri_path}")
