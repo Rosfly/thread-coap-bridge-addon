@@ -107,11 +107,13 @@ class CoAPClient:
             return False
 
     async def observe_resource(self, device_id, ipv6_addr, uri_path,
-                               registry=None, offline_threshold=5, discovery=None,
-                               reregister_interval=60):
+                               registry=None, offline_threshold=5, discovery=None):
         """
         Start CoAP Observe on a resource with automatic reconnection.
         Automatically publishes updates to MQTT.
+
+        Note: Device reboots are detected via uptime polling in main.py,
+        which triggers reregister_observers() when uptime resets.
 
         Args:
             device_id: Device identifier
@@ -120,7 +122,6 @@ class CoAPClient:
             registry: DeviceRegistry instance for updating last_seen
             offline_threshold: Number of consecutive failures before marking offline
             discovery: CoAPDiscovery instance to call forget_device() when observe stops
-            reregister_interval: Seconds between periodic re-registration (handles device reboots)
         """
         logger.info(f"Starting observation: {device_id} - coap://[{ipv6_addr}]{uri_path}")
 
@@ -141,8 +142,16 @@ class CoAPClient:
                 # Start observation
                 observation_request = self.context.request(request)
 
-                # Store observation so we can cancel it later
-                self.observations[obs_key] = observation_request
+                # Store observation so we can cancel and restart it later
+                self.observations[obs_key] = {
+                    'request': observation_request,
+                    'device_id': device_id,
+                    'ipv6_addr': ipv6_addr,
+                    'uri_path': uri_path,
+                    'registry': registry,
+                    'offline_threshold': offline_threshold,
+                    'discovery': discovery
+                }
 
                 # Wait for initial response (with timeout)
                 try:
@@ -194,7 +203,7 @@ class CoAPClient:
 
                 # Process observation notifications
                 # The async for loop blocks waiting for notifications from the server
-                # It only ends when: observation is cancelled, server sends deregister, or error
+                # It ends when: observation is cancelled, server sends deregister, or error
                 try:
                     async for response in observation_request.observation:
                         if not self.running:
@@ -223,9 +232,9 @@ class CoAPClient:
                     logger.warning(f"Observation iteration error for {device_id}{uri_path}: {obs_error}")
 
                 # Observation stream ended - wait before re-establishing
-                # This handles device reboots where the device loses its observer list
-                logger.info(f"Observe stream ended for {device_id}{uri_path}, re-registering in {reregister_interval}s...")
-                await asyncio.sleep(reregister_interval)
+                # Device reboots are handled separately via uptime polling
+                logger.info(f"Observe stream ended for {device_id}{uri_path}, waiting before retry...")
+                await asyncio.sleep(30)
 
             except asyncio.CancelledError:
                 logger.info(f"Observation cancelled for {device_id}{uri_path}")
@@ -251,6 +260,49 @@ class CoAPClient:
             logger.warning(f"Giving up observe for {device_id}{uri_path} after {consecutive_failures} failures")
             if discovery:
                 discovery.forget_device(ipv6_addr)
+
+    async def reregister_observers(self, device_id):
+        """
+        Re-register all observers for a device after detecting a reboot.
+        Called by main.py when uptime reset is detected.
+        """
+        logger.info(f"Re-registering observers for {device_id} after reboot detected")
+
+        # Find all observations for this device
+        device_observations = [
+            (key, obs) for key, obs in self.observations.items()
+            if obs.get('device_id') == device_id
+        ]
+
+        for obs_key, obs_info in device_observations:
+            try:
+                # Cancel existing observation
+                if 'request' in obs_info:
+                    try:
+                        obs_info['request'].observation.cancel()
+                    except Exception:
+                        pass
+
+                # Remove from tracking
+                del self.observations[obs_key]
+
+                # Re-start observation (will be picked up by the while loop naturally)
+                # Create a new task to restart the observation
+                asyncio.create_task(
+                    self.observe_resource(
+                        obs_info['device_id'],
+                        obs_info['ipv6_addr'],
+                        obs_info['uri_path'],
+                        registry=obs_info.get('registry'),
+                        offline_threshold=obs_info.get('offline_threshold', 5),
+                        discovery=obs_info.get('discovery')
+                    ),
+                    name=f"reobserve_{device_id}_{obs_info['uri_path']}"
+                )
+                logger.info(f"Re-started observation for {device_id}{obs_info['uri_path']}")
+
+            except Exception as e:
+                logger.error(f"Error re-registering observer {obs_key}: {e}")
 
     async def poll_resource(self, device_id, ipv6_addr, uri_path, interval=5,
                            registry=None, offline_threshold=5, stop_after_offline=30,

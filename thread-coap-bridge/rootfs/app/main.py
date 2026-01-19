@@ -40,6 +40,10 @@ class CoAPBridgeService:
         self.recent_commands = {}
         self.command_suppress_time = 10  # Seconds to suppress poll updates after command
 
+        # Track device uptime to detect reboots
+        # Format: {device_id: last_uptime_ms}
+        self.device_uptimes = {}
+
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
@@ -208,7 +212,7 @@ class CoAPBridgeService:
 
                         # Start monitoring resources
                         # Use Observe for LED and button (real-time updates)
-                        # Use polling for battery/voltage (slow-changing values)
+                        # Use polling for battery/voltage/uptime (slow-changing values)
                         offline_threshold = self.config.get('offline_threshold_polls', 5)
 
                         for resource in resources:
@@ -227,6 +231,19 @@ class CoAPBridgeService:
                                 )
                                 self.tasks.append(observe_task)
                                 logger.info(f"Started Observe for {device.device_id}/{resource.uri_path}")
+                            elif resource.resource_type == 'uptime':
+                                # Poll uptime to detect device reboots
+                                uptime_task = asyncio.create_task(
+                                    self._poll_uptime(
+                                        device.device_id,
+                                        device.ipv6_address,
+                                        resource.uri_path,
+                                        interval=60
+                                    ),
+                                    name=f"uptime_{device.device_id}"
+                                )
+                                self.tasks.append(uptime_task)
+                                logger.info(f"Started uptime polling for {device.device_id}")
                             else:
                                 # Use polling for battery/voltage (slow-changing)
                                 poll_task = asyncio.create_task(
@@ -306,6 +323,46 @@ class CoAPBridgeService:
             except Exception as e:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
+
+    async def _poll_uptime(self, device_id, ipv6_addr, uri_path, interval=60):
+        """
+        Poll device uptime to detect reboots.
+        When uptime decreases (device rebooted), re-register observers.
+        """
+        logger.info(f"Starting uptime monitor for {device_id} (interval: {interval}s)")
+
+        while self.running:
+            try:
+                payload = await self.coap_client.get_resource(ipv6_addr, uri_path)
+
+                if payload:
+                    try:
+                        data = json.loads(payload)
+                        current_uptime = data.get('value', 0)
+
+                        # Check for reboot (uptime decreased)
+                        last_uptime = self.device_uptimes.get(device_id)
+                        if last_uptime is not None and current_uptime < last_uptime:
+                            logger.warning(f"Device {device_id} rebooted! "
+                                         f"Uptime went from {last_uptime}ms to {current_uptime}ms")
+                            # Re-register observers for this device
+                            await self.coap_client.reregister_observers(device_id)
+
+                        # Store current uptime
+                        self.device_uptimes[device_id] = current_uptime
+                        logger.debug(f"Device {device_id} uptime: {current_uptime}ms")
+
+                    except (json.JSONDecodeError, KeyError) as e:
+                        logger.warning(f"Failed to parse uptime response: {e}")
+
+                await asyncio.sleep(interval)
+
+            except asyncio.CancelledError:
+                logger.info(f"Uptime polling cancelled for {device_id}")
+                break
+            except Exception as e:
+                logger.error(f"Error polling uptime for {device_id}: {e}")
+                await asyncio.sleep(interval)
 
     def _extract_led_state(self, state_value):
         """Extract LED state from various response formats."""
