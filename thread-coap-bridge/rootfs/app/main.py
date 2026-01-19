@@ -328,6 +328,7 @@ class CoAPBridgeService:
         """
         Poll device uptime to detect reboots.
         When uptime decreases (device rebooted), re-register observers.
+        Also publishes uptime to MQTT for display in Home Assistant.
         """
         logger.info(f"Starting uptime monitor for {device_id} (interval: {interval}s)")
 
@@ -351,6 +352,10 @@ class CoAPBridgeService:
                         # Store current uptime
                         self.device_uptimes[device_id] = current_uptime
                         logger.debug(f"Device {device_id} uptime: {current_uptime}ms")
+
+                        # Publish uptime to MQTT (convert ms to seconds for readability)
+                        uptime_seconds = current_uptime // 1000
+                        self.mqtt.publish_state(device_id, uri_path, {'value': uptime_seconds})
 
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning(f"Failed to parse uptime response: {e}")

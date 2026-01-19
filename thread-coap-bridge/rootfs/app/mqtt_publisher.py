@@ -282,6 +282,7 @@ class MQTTPublisher:
             "humidity": "%",
             "battery": "%",
             "voltage": "V",
-            "current": "A"
+            "current": "A",
+            "uptime": "s"
         }
         return units.get(resource_type.lower(), None)
