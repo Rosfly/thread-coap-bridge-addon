@@ -32,8 +32,15 @@ class CoAPClient:
             logger.error(f"Failed to initialize CoAP context: {e}")
             raise
 
-    async def get_resource(self, ipv6_addr, uri_path):
-        """GET request to CoAP resource."""
+    async def get_resource(self, ipv6_addr, uri_path, timeout=65.0):
+        """GET request to CoAP resource.
+
+        Args:
+            ipv6_addr: Device IPv6 address
+            uri_path: CoAP resource path
+            timeout: Request timeout in seconds. Default 65s to support SED devices
+                    that poll every 60 seconds (request queued at parent until poll).
+        """
         logger.debug(f"GET coap://[{ipv6_addr}]{uri_path}")
 
         if not self.context:
@@ -46,7 +53,7 @@ class CoAPClient:
 
             response = await asyncio.wait_for(
                 self.context.request(request).response,
-                timeout=10.0
+                timeout=timeout
             )
 
             if response.code.is_successful():
@@ -66,8 +73,16 @@ class CoAPClient:
             logger.error(f"GET error for {ipv6_addr}{uri_path}: {e}")
             return None
 
-    async def put_resource(self, ipv6_addr, uri_path, payload):
-        """PUT request to CoAP resource (for control commands)."""
+    async def put_resource(self, ipv6_addr, uri_path, payload, timeout=65.0):
+        """PUT request to CoAP resource (for control commands).
+
+        Args:
+            ipv6_addr: Device IPv6 address
+            uri_path: CoAP resource path
+            payload: Data to send
+            timeout: Request timeout in seconds. Default 65s to support SED devices
+                    that poll every 60 seconds (request queued at parent until poll).
+        """
         logger.debug(f"PUT coap://[{ipv6_addr}]{uri_path} = {payload}")
 
         if not self.context:
@@ -89,7 +104,7 @@ class CoAPClient:
 
             response = await asyncio.wait_for(
                 self.context.request(request).response,
-                timeout=10.0
+                timeout=timeout
             )
 
             if response.code.is_successful():
@@ -154,10 +169,11 @@ class CoAPClient:
                 }
 
                 # Wait for initial response (with timeout)
+                # Use 65s timeout to support SED devices that poll every 60 seconds
                 try:
                     initial_response = await asyncio.wait_for(
                         observation_request.response,
-                        timeout=15.0
+                        timeout=75.0
                     )
 
                     if initial_response.code.is_successful():

@@ -88,8 +88,14 @@ class CoAPDiscovery:
         if not self.discovered_addresses:
             logger.warning("No devices discovered via multicast - devices may not be responding to multicast")
 
-    async def query_device_resources(self, ipv6_addr):
-        """Query individual device for its resources."""
+    async def query_device_resources(self, ipv6_addr, timeout=65.0):
+        """Query individual device for its resources.
+
+        Args:
+            ipv6_addr: Device IPv6 address
+            timeout: Request timeout in seconds. Default 65s to support SED devices
+                    that poll every 60 seconds (request queued at parent until poll).
+        """
         logger.debug(f"Querying resources from {ipv6_addr}")
 
         if not self.context:
@@ -103,7 +109,7 @@ class CoAPDiscovery:
 
             response = await asyncio.wait_for(
                 self.context.request(request).response,
-                timeout=5.0
+                timeout=timeout
             )
 
             if response.payload:
