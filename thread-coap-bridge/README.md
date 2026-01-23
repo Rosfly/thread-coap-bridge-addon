@@ -12,6 +12,58 @@ A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to 
 - **Robust offline detection** with configurable thresholds
 - **Automatic device cleanup** for long-offline devices
 - **Automatic re-discovery** when devices return online
+- **SED (Sleepy End Device) support** with 65-second timeouts
+
+## Recent Changes (v0.4.0)
+
+### SED (Sleepy End Device) Support
+
+Added full support for Thread Sleepy End Devices, which sleep most of the time to conserve battery.
+
+#### How SED Devices Work
+
+SED devices keep their radio OFF between poll intervals (typically 60 seconds) to achieve ultra-low power consumption. When the bridge sends a request to an SED:
+
+1. Request is sent to the SED's IPv6 address
+2. Parent router queues the request (SED is sleeping)
+3. SED wakes at its next poll interval (up to 60s later)
+4. SED receives the queued request from parent
+5. SED processes and responds
+6. Bridge receives response
+
+#### Changes for SED Support
+
+**Increased timeouts to 65 seconds** (longer than typical 60s poll period):
+
+| Function | Old Timeout | New Timeout |
+|----------|-------------|-------------|
+| `get_resource()` | 10s | 65s |
+| `put_resource()` | 10s | 65s |
+| `observe_resource()` initial | 15s | 65s |
+| `query_device_resources()` | 5s | 65s |
+
+**Why 65 seconds?** SED devices poll every 60 seconds by default. The extra 5 seconds provides margin for network latency and processing time.
+
+#### SED Device Discovery
+
+SED devices require special handling for initial discovery:
+
+1. **During boot**: SED firmware stays awake for a "grace period" (typically 2 minutes)
+2. **Bridge discovers device** via multicast during this window
+3. **After grace period**: Device enters SED sleep mode
+4. **Re-discovery**: Uses unicast probing to last-known IPv6 (works with SED)
+
+#### Latency Expectations with SED
+
+| Operation | MTD (always-on) | SED (sleepy) |
+|-----------|-----------------|--------------|
+| Button notification | ~50ms | ~100-200ms |
+| GET /battery | ~50ms | Up to 60s |
+| PUT /led | ~50ms | Up to 60s |
+
+**Note:** Button notifications remain fast because the SED wakes immediately on GPIO interrupt and sends the notification. Only *incoming* requests have latency.
+
+---
 
 ## Recent Changes (v0.3.0)
 
@@ -108,6 +160,25 @@ The bridge handles device disconnection and reconnection gracefully:
 | `offline_threshold_polls` | 5 | Failures before marking offline |
 | `cleanup_after_hours` | 24 | Hours offline before removal |
 | `cleanup_check_interval` | 3600 | Seconds between cleanup checks |
+
+#### SED vs MTD Devices
+
+The bridge automatically handles both device types:
+
+| Feature | MTD (Mobile Thread Device) | SED (Sleepy End Device) |
+|---------|---------------------------|------------------------|
+| Radio | Always listening | Sleeps between polls |
+| Power consumption | Higher (~mA) | Ultra-low (~µA) |
+| Request latency | Immediate (~50ms) | Up to poll period (60s) |
+| Push notifications | Immediate | Immediate (GPIO wakes device) |
+| Discovery | Multicast works | Requires grace period at boot |
+
+**Identifying device type** on the border router:
+```shell
+ot-ctl neighbor table
+# R=0 → SED (RxOnWhenIdle=false)
+# R=1 → MTD (RxOnWhenIdle=true)
+```
 
 ### Key Bug Fixes
 

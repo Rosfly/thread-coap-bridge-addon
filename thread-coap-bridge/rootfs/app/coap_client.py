@@ -227,7 +227,7 @@ class CoAPClient:
 
                         if response.code.is_successful():
                             payload = response.payload.decode('utf-8').rstrip('\x00')
-                            logger.debug(f"Observe notification from {device_id}{uri_path}: {payload}")
+                            logger.info(f"Observe notification from {device_id}{uri_path}: {payload}")
 
                             # Reset failure counter on successful notification
                             consecutive_failures = 0
