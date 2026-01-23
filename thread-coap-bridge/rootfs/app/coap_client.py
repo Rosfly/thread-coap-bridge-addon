@@ -411,14 +411,12 @@ class CoAPClient:
                         if discovery:
                             discovery.forget_device(ipv6_addr)
 
-                    # Stop polling after too many failures - let discovery find device again
+                    # After max_failures, reduce logging but keep polling
+                    # Don't stop - SED devices may have long delays between successful polls
                     if consecutive_failures >= max_failures:
-                        logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures. "
-                                   f"Discovery will find device if it comes back online.")
-                        # Remove from discovered_addresses so it can be re-registered
-                        if discovery:
-                            discovery.forget_device(ipv6_addr)
-                        break
+                        # Only log every 10th failure to reduce log spam
+                        if consecutive_failures % 10 == 0:
+                            logger.debug(f"Still polling {device_id}{uri_path} after {consecutive_failures} failures")
 
                 await asyncio.sleep(interval)
 
@@ -432,14 +430,7 @@ class CoAPClient:
                 if registry:
                     await registry.update_device_failure(device_id, failed=True)
 
-                # Also check max failures on exceptions
-                if consecutive_failures >= max_failures:
-                    logger.info(f"Stopping poll for {device_id}{uri_path} after {consecutive_failures} failures.")
-                    # Remove from discovered_addresses so it can be re-registered
-                    if discovery:
-                        discovery.forget_device(ipv6_addr)
-                    break
-
+                # Don't stop on max_failures - SED devices need persistent polling
                 await asyncio.sleep(interval)
 
     async def shutdown(self):
