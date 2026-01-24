@@ -158,6 +158,35 @@ class DeviceRegistry:
             logger.error(f"Error getting uncommissioned devices: {e}")
             return []
 
+    async def get_all_devices(self):
+        """Get all registered devices."""
+        try:
+            async with self.connection.cursor() as cursor:
+                await cursor.execute('''
+                    SELECT device_id, ipv6_address, eui64, last_seen, commissioned, is_online
+                    FROM devices
+                ''')
+
+                rows = await cursor.fetchall()
+                devices = []
+
+                for row in rows:
+                    device = Device(
+                        device_id=row[0],
+                        ipv6_address=row[1],
+                        eui64=row[2],
+                        last_seen=datetime.fromisoformat(row[3]) if row[3] else None,
+                        commissioned=bool(row[4])
+                    )
+                    device.is_online = bool(row[5]) if len(row) > 5 else True
+                    devices.append(device)
+
+                return devices
+
+        except Exception as e:
+            logger.error(f"Error getting all devices: {e}")
+            return []
+
     async def get_device_by_id(self, device_id):
         """Get device by ID."""
         try:

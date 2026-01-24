@@ -156,8 +156,8 @@ class MQTTPublisher:
             elif resource_lower == "voltage":
                 payload["device_class"] = "voltage"
                 payload["state_class"] = "measurement"
-                # Convert millivolts to volts (4064 -> 4.06)
-                payload["value_template"] = "{{ (value | float / 1000) | round(2) }}"
+                # Convert millivolts to volts (4064 -> 4.1)
+                payload["value_template"] = "{{ (value | float / 1000) | round(1) }}"
             elif resource_lower == "uptime":
                 payload["device_class"] = "duration"
                 payload["state_class"] = "total_increasing"

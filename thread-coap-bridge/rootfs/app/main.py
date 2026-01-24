@@ -93,6 +93,10 @@ class CoAPBridgeService:
             self.discovery = CoAPDiscovery(self.registry, self.config.coap_config)
             await self.discovery.initialize()
 
+            # Re-publish MQTT discovery for all known devices on startup
+            # This ensures HA has up-to-date discovery config after addon updates
+            await self._republish_all_discovery()
+
             # Start background tasks
             logger.info("Starting background tasks...")
 
@@ -134,6 +138,33 @@ class CoAPBridgeService:
         except Exception as e:
             logger.exception(f"Fatal error in main loop: {e}")
             sys.exit(1)
+
+    async def _republish_all_discovery(self):
+        """Re-publish MQTT discovery for all known devices on startup."""
+        logger.info("Re-publishing MQTT discovery for all known devices...")
+
+        try:
+            all_devices = await self.registry.get_all_devices()
+            for device in all_devices:
+                resources = await self.registry.get_device_resources(device.device_id)
+                logger.info(f"Re-publishing discovery for {device.device_id} ({len(resources)} resources)")
+
+                for resource in resources:
+                    self.mqtt.publish_discovery(
+                        device.device_id,
+                        resource.resource_type,
+                        resource.uri_path,
+                        device.ipv6_address
+                    )
+
+                # Also publish availability
+                is_online = getattr(device, 'is_online', True)
+                self.mqtt.publish_availability(device.device_id, available=is_online)
+
+            logger.info(f"Re-published discovery for {len(all_devices)} devices")
+
+        except Exception as e:
+            logger.error(f"Error re-publishing discovery: {e}")
 
     async def _discovery_loop(self):
         """Periodic discovery of new devices."""
