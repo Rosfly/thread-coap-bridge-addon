@@ -36,8 +36,11 @@ class MQTTPublisher:
             # Store event loop reference for callback thread
             self.loop = asyncio.get_event_loop()
 
-            # Initialize paho-mqtt client
-            self.client = mqtt.Client(client_id="thread_coap_bridge", protocol=mqtt.MQTTv311)
+            # Initialize paho-mqtt client with unique ID to avoid session conflicts
+            import time
+            client_id = f"thread_coap_bridge_{int(time.time())}"
+            self.client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+            logger.info(f"MQTT client ID: {client_id}")
 
             # Set username/password if provided (only if username is not empty)
             if self.username and self.username.strip():
@@ -156,20 +159,32 @@ class MQTTPublisher:
             elif resource_lower == "voltage":
                 payload["device_class"] = "voltage"
                 payload["state_class"] = "measurement"
-                # Convert millivolts to volts (4064 -> 4.1)
-                payload["value_template"] = "{{ (value | float / 1000) | round(1) }}"
+                # Note: voltage is converted to volts in main.py before publishing
             elif resource_lower == "uptime":
                 payload["device_class"] = "duration"
                 payload["state_class"] = "total_increasing"
 
         # Publish discovery message with retain flag
         payload_json = json.dumps(payload)
-        result = self.client.publish(topic, payload_json, qos=1, retain=True)
+        logger.debug(f"Discovery payload: {payload_json}")
 
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            logger.info(f"Published discovery to {topic}")
-        else:
-            logger.error(f"Failed to publish discovery: {result.rc}")
+        try:
+            result = self.client.publish(topic, payload_json, qos=1, retain=True)
+
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.error(f"Failed to queue discovery: {result.rc}")
+                return
+
+            # Wait for delivery confirmation
+            result.wait_for_publish(timeout=5.0)
+
+            if result.is_published():
+                logger.info(f"Published discovery to {topic} (state_topic: {state_topic})")
+            else:
+                logger.warning(f"Discovery to {topic} may not have been delivered")
+
+        except Exception as e:
+            logger.error(f"Exception publishing discovery to {topic}: {e}")
 
     def publish_state(self, device_id, resource_uri, state_value):
         """Publish device state update."""
@@ -206,8 +221,9 @@ class MQTTPublisher:
 
             # For simple value response: {"device_id": "...", "value": 70}
             elif 'value' in state_value:
-                payload = str(state_value['value'])
-                logger.info(f"Value extracted: {state_value['value']} -> payload='{payload}'")
+                raw_value = state_value['value']
+                payload = str(raw_value)
+                logger.info(f"Value extracted: {raw_value} -> payload='{payload}'")
             else:
                 payload = json.dumps(state_value)
         else:
@@ -215,11 +231,30 @@ class MQTTPublisher:
 
         # Publish single state (retain=True so HA remembers state across restarts)
         state_topic = f"thread/{device_id}/{object_id}/state"
-        logger.info(f"Publishing state: {state_topic} = {payload}")
-        result = self.client.publish(state_topic, payload, qos=1, retain=True)
 
-        if result.rc != mqtt.MQTT_ERR_SUCCESS:
-            logger.error(f"Failed to publish state: {result.rc}")
+        if not self.connected:
+            logger.error(f"MQTT not connected! Cannot publish to {state_topic}")
+            return
+
+        logger.info(f"Publishing state: {state_topic} = {payload}")
+
+        try:
+            result = self.client.publish(state_topic, payload, qos=1, retain=True)
+
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.error(f"Failed to queue publish to {state_topic}: rc={result.rc}")
+                return
+
+            # Wait for message to be delivered (important for QoS 1)
+            result.wait_for_publish(timeout=5.0)
+
+            if result.is_published():
+                logger.debug(f"Confirmed delivery to {state_topic}")
+            else:
+                logger.warning(f"Message to {state_topic} may not have been delivered")
+
+        except Exception as e:
+            logger.error(f"Exception publishing to {state_topic}: {e}")
 
     def publish_availability(self, device_id, available=True):
         """Publish device availability."""

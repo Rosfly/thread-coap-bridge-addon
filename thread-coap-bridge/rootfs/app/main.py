@@ -362,8 +362,9 @@ class CoAPBridgeService:
                         data = json.loads(payload)
                         value = data.get('value', 0)
 
-                        # Special handling for uptime: detect reboots
+                        # Special handling per resource type
                         if resource_type == 'uptime':
+                            # Detect reboots
                             last_uptime = self.device_uptimes.get(device_id)
                             if last_uptime is not None and value < last_uptime:
                                 logger.warning(f"Device {device_id} rebooted! "
@@ -374,6 +375,10 @@ class CoAPBridgeService:
                             self.device_uptimes[device_id] = value
                             # Convert ms to seconds for display
                             value = value // 1000
+
+                        elif resource_type == 'voltage':
+                            # Convert millivolts to volts (4064 -> 4.06)
+                            value = round(value / 1000, 2)
 
                         logger.info(f"Sensor {uri_path}: {value}")
                         self.mqtt.publish_state(device_id, uri_path, {'value': value})

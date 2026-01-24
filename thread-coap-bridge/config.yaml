@@ -1,5 +1,5 @@
 name: "Thread CoAP Bridge"
-version: "0.2.0"
+version: "0.2.1"
 slug: "thread_coap_bridge"
 description: "Bridge CoAP devices on Thread network to Home Assistant via MQTT"
 url: "https://github.com/Rosfly/thread-coap-bridge-addon"
