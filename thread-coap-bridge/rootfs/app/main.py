@@ -44,6 +44,14 @@ class CoAPBridgeService:
         # Format: {device_id: last_uptime_ms}
         self.device_uptimes = {}
 
+        # Track per-sensor failures for availability reporting
+        # Format: {(device_id, uri_path): consecutive_failure_count}
+        self.sensor_failures = {}
+        # Format: {(device_id, uri_path): is_available}
+        self.sensor_available = {}
+        # Number of consecutive failures before marking sensor offline
+        self.sensor_offline_threshold = 3
+
         # Setup signal handlers for graceful shutdown
         signal.signal(signal.SIGTERM, self._handle_shutdown)
         signal.signal(signal.SIGINT, self._handle_shutdown)
@@ -263,21 +271,30 @@ class CoAPBridgeService:
                                 self.tasks.append(observe_task)
                                 logger.info(f"Started Observe for {device.device_id}/{resource.uri_path}")
                             else:
-                                # Use simple polling for all sensors (uptime, battery, voltage)
-                                # All sensors poll simultaneously so requests queue together at OTBR
-                                # and are delivered together when SED wakes up
+                                # Use staggered polling for sensors (battery, voltage, uptime)
+                                # Staggering ensures battery is queried first (voltage depends on it)
+                                # and reduces burst load on SED parent router
+                                poll_delays = {
+                                    'battery': 0,    # Battery first (voltage depends on fresh measurement)
+                                    'voltage': 40,   # Voltage 40s after battery
+                                    'uptime': 80,    # Uptime 80s after battery
+                                }
+                                initial_delay = poll_delays.get(resource.resource_type, 0)
+
                                 poll_task = asyncio.create_task(
                                     self._poll_sensor(
                                         device.device_id,
                                         device.ipv6_address,
                                         resource.uri_path,
                                         resource.resource_type,
-                                        interval=60
+                                        interval=120,  # 120s interval for SED efficiency
+                                        initial_delay=initial_delay
                                     ),
                                     name=f"poll_{device.device_id}_{resource.uri_path}"
                                 )
                                 self.tasks.append(poll_task)
-                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path}")
+                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path} "
+                                          f"(delay={initial_delay}s, interval=120s)")
 
                         # Mark as commissioned
                         await self.registry.mark_commissioned(device.device_id)
@@ -340,14 +357,34 @@ class CoAPBridgeService:
             except Exception as e:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
-    async def _poll_sensor(self, device_id, ipv6_addr, uri_path, resource_type, interval=60):
+    async def _poll_sensor(self, device_id, ipv6_addr, uri_path, resource_type,
+                           interval=120, initial_delay=0):
         """
-        Poll any sensor resource (uptime, battery, voltage) with simple retry logic.
-        All sensors use the same simple polling - no complex failure tracking.
+        Poll sensor resource with retry logic and per-sensor availability tracking.
 
-        For uptime: Also detects device reboots and re-registers observers.
+        Args:
+            device_id: Device identifier
+            ipv6_addr: Device IPv6 address
+            uri_path: CoAP resource path (e.g., /battery)
+            resource_type: Type of sensor (battery, voltage, uptime)
+            interval: Polling interval in seconds (default 120s for SED efficiency)
+            initial_delay: Stagger start time to avoid simultaneous requests
         """
-        logger.info(f"Starting sensor polling for {device_id}{uri_path} (interval: {interval}s)")
+        sensor_key = (device_id, uri_path)
+        object_id = uri_path.strip('/')
+
+        logger.info(f"Starting sensor polling for {device_id}{uri_path} "
+                   f"(interval: {interval}s, initial_delay: {initial_delay}s)")
+
+        # Initialize availability tracking
+        self.sensor_failures[sensor_key] = 0
+        self.sensor_available[sensor_key] = True
+
+        # Apply initial delay for staggered polling
+        if initial_delay > 0:
+            logger.info(f"Waiting {initial_delay}s before first poll of {uri_path}")
+            await asyncio.sleep(initial_delay)
+
         poll_count = 0
 
         while self.running:
@@ -355,12 +392,31 @@ class CoAPBridgeService:
                 poll_count += 1
                 logger.info(f"Polling {uri_path} (#{poll_count})")
 
+                # First attempt
                 payload = await self.coap_client.get_resource(ipv6_addr, uri_path)
+
+                # Retry once on failure (10s delay for SED to wake)
+                if not payload:
+                    logger.info(f"Retrying {uri_path} after 10s...")
+                    await asyncio.sleep(10)
+                    payload = await self.coap_client.get_resource(ipv6_addr, uri_path)
 
                 if payload:
                     try:
                         data = json.loads(payload)
                         value = data.get('value', 0)
+
+                        # Reset failure counter on success
+                        if self.sensor_failures[sensor_key] > 0:
+                            logger.info(f"Sensor {uri_path} recovered after "
+                                       f"{self.sensor_failures[sensor_key]} failures")
+                        self.sensor_failures[sensor_key] = 0
+
+                        # Mark sensor online if it was offline
+                        if not self.sensor_available.get(sensor_key, True):
+                            self.sensor_available[sensor_key] = True
+                            self.mqtt.publish_sensor_availability(device_id, object_id, True)
+                            logger.info(f"Sensor {device_id}/{object_id} is back online")
 
                         # Special handling per resource type
                         if resource_type == 'uptime':
@@ -377,16 +433,18 @@ class CoAPBridgeService:
                             value = value // 1000
 
                         elif resource_type == 'voltage':
-                            # Convert millivolts to volts (4064 -> 4.06)
-                            value = round(value / 1000, 2)
+                            # Convert millivolts to volts with proper formatting (4064 -> "4.06")
+                            value = f"{value / 1000:.2f}"
 
                         logger.info(f"Sensor {uri_path}: {value}")
                         self.mqtt.publish_state(device_id, uri_path, {'value': value})
 
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning(f"Failed to parse sensor response for {uri_path}: {e}")
+                        self._handle_sensor_failure(device_id, uri_path, object_id)
                 else:
-                    logger.warning(f"No response from {uri_path} (#{poll_count})")
+                    logger.warning(f"No response from {uri_path} after retry (#{poll_count})")
+                    self._handle_sensor_failure(device_id, uri_path, object_id)
 
                 await asyncio.sleep(interval)
 
@@ -397,7 +455,24 @@ class CoAPBridgeService:
                 logger.error(f"Error polling sensor {uri_path}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+                self._handle_sensor_failure(device_id, uri_path, object_id)
                 await asyncio.sleep(interval)
+
+    def _handle_sensor_failure(self, device_id, uri_path, object_id):
+        """Handle sensor polling failure - track consecutive failures and update availability."""
+        sensor_key = (device_id, uri_path)
+        self.sensor_failures[sensor_key] = self.sensor_failures.get(sensor_key, 0) + 1
+        failure_count = self.sensor_failures[sensor_key]
+
+        logger.warning(f"Sensor {uri_path} failure #{failure_count}")
+
+        # Mark sensor offline after threshold consecutive failures
+        if failure_count >= self.sensor_offline_threshold:
+            if self.sensor_available.get(sensor_key, True):
+                self.sensor_available[sensor_key] = False
+                self.mqtt.publish_sensor_availability(device_id, object_id, False)
+                logger.warning(f"Sensor {device_id}/{object_id} marked offline "
+                             f"after {failure_count} consecutive failures")
 
     def _extract_led_state(self, state_value):
         """Extract LED state from various response formats."""

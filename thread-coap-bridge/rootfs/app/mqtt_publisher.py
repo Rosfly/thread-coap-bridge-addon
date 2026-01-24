@@ -159,10 +159,13 @@ class MQTTPublisher:
             elif resource_lower == "voltage":
                 payload["device_class"] = "voltage"
                 payload["state_class"] = "measurement"
-                # Note: voltage is converted to volts in main.py before publishing
             elif resource_lower == "uptime":
                 payload["device_class"] = "duration"
                 payload["state_class"] = "total_increasing"
+
+            # Use per-sensor availability for polled sensors (more accurate status)
+            if resource_lower in ("battery", "voltage", "uptime"):
+                payload["availability_topic"] = f"thread/{device_id}/{object_id}/availability"
 
         # Publish discovery message with retain flag
         payload_json = json.dumps(payload)
@@ -267,6 +270,18 @@ class MQTTPublisher:
 
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             logger.error(f"Failed to publish availability: {result.rc}")
+
+    def publish_sensor_availability(self, device_id, sensor_type, available=True):
+        """Publish per-sensor availability for granular status in Home Assistant."""
+        avail_topic = f"thread/{device_id}/{sensor_type}/availability"
+        payload = "online" if available else "offline"
+
+        logger.info(f"Publishing sensor availability: {device_id}/{sensor_type} = {payload}")
+
+        result = self.client.publish(avail_topic, payload, qos=1, retain=True)
+
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            logger.error(f"Failed to publish sensor availability: {result.rc}")
 
     def set_command_callback(self, callback):
         """Set callback for MQTT command messages (LED control from HA)."""
