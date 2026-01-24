@@ -233,23 +233,20 @@ class CoAPBridgeService:
                                 logger.info(f"Started Observe for {device.device_id}/{resource.uri_path}")
                             else:
                                 # Use simple polling for all sensors (uptime, battery, voltage)
-                                # All sensors use the same simple _poll_sensor method
-                                # Stagger start times to avoid sending all requests simultaneously
-                                sensor_index = len([t for t in self.tasks if 'poll_' in t.get_name()])
-                                stagger_delay = sensor_index * 5  # 5 seconds between each sensor start
+                                # All sensors poll simultaneously so requests queue together at OTBR
+                                # and are delivered together when SED wakes up
                                 poll_task = asyncio.create_task(
-                                    self._poll_sensor_with_delay(
+                                    self._poll_sensor(
                                         device.device_id,
                                         device.ipv6_address,
                                         resource.uri_path,
                                         resource.resource_type,
-                                        interval=60,
-                                        initial_delay=stagger_delay
+                                        interval=60
                                     ),
                                     name=f"poll_{device.device_id}_{resource.uri_path}"
                                 )
                                 self.tasks.append(poll_task)
-                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path} (delay: {stagger_delay}s)")
+                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path}")
 
                         # Mark as commissioned
                         await self.registry.mark_commissioned(device.device_id)
@@ -312,15 +309,6 @@ class CoAPBridgeService:
             except Exception as e:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
-
-    async def _poll_sensor_with_delay(self, device_id, ipv6_addr, uri_path, resource_type,
-                                       interval=60, initial_delay=0):
-        """Wrapper that adds initial delay before starting sensor polling."""
-        if initial_delay > 0:
-            logger.info(f"Delaying {uri_path} polling by {initial_delay}s to stagger requests")
-            await asyncio.sleep(initial_delay)
-        await self._poll_sensor(device_id, ipv6_addr, uri_path, resource_type, interval)
-
     async def _poll_sensor(self, device_id, ipv6_addr, uri_path, resource_type, interval=60):
         """
         Poll any sensor resource (uptime, battery, voltage) with simple retry logic.
