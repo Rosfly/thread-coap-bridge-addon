@@ -144,10 +144,23 @@ class MQTTPublisher:
             # The entity will appear as a generic binary_sensor
 
         elif component == "sensor":
-            payload["unit_of_measurement"] = self._get_unit_for_sensor(resource_type)
-            # Convert millivolts to volts for voltage sensors (format: 3.80V)
-            if resource_type.lower() == "voltage":
-                payload["value_template"] = "{{ '%.2f' | format(value | float / 1000) }}"
+            unit = self._get_unit_for_sensor(resource_type)
+            if unit:
+                payload["unit_of_measurement"] = unit
+
+            # Set device_class for proper HA display
+            resource_lower = resource_type.lower()
+            if resource_lower == "battery":
+                payload["device_class"] = "battery"
+                payload["state_class"] = "measurement"
+            elif resource_lower == "voltage":
+                payload["device_class"] = "voltage"
+                payload["state_class"] = "measurement"
+                # Convert millivolts to volts (4064 -> 4.06)
+                payload["value_template"] = "{{ (value | float / 1000) | round(2) }}"
+            elif resource_lower == "uptime":
+                payload["device_class"] = "duration"
+                payload["state_class"] = "total_increasing"
 
         # Publish discovery message with retain flag
         payload_json = json.dumps(payload)
