@@ -234,18 +234,22 @@ class CoAPBridgeService:
                             else:
                                 # Use simple polling for all sensors (uptime, battery, voltage)
                                 # All sensors use the same simple _poll_sensor method
+                                # Stagger start times to avoid sending all requests simultaneously
+                                sensor_index = len([t for t in self.tasks if 'poll_' in t.get_name()])
+                                stagger_delay = sensor_index * 5  # 5 seconds between each sensor start
                                 poll_task = asyncio.create_task(
-                                    self._poll_sensor(
+                                    self._poll_sensor_with_delay(
                                         device.device_id,
                                         device.ipv6_address,
                                         resource.uri_path,
                                         resource.resource_type,
-                                        interval=60
+                                        interval=60,
+                                        initial_delay=stagger_delay
                                     ),
                                     name=f"poll_{device.device_id}_{resource.uri_path}"
                                 )
                                 self.tasks.append(poll_task)
-                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path}")
+                                logger.info(f"Started polling for {device.device_id}/{resource.uri_path} (delay: {stagger_delay}s)")
 
                         # Mark as commissioned
                         await self.registry.mark_commissioned(device.device_id)
@@ -309,6 +313,14 @@ class CoAPBridgeService:
                 logger.error(f"Error in cleanup loop: {e}")
                 await asyncio.sleep(cleanup_interval)
 
+    async def _poll_sensor_with_delay(self, device_id, ipv6_addr, uri_path, resource_type,
+                                       interval=60, initial_delay=0):
+        """Wrapper that adds initial delay before starting sensor polling."""
+        if initial_delay > 0:
+            logger.info(f"Delaying {uri_path} polling by {initial_delay}s to stagger requests")
+            await asyncio.sleep(initial_delay)
+        await self._poll_sensor(device_id, ipv6_addr, uri_path, resource_type, interval)
+
     async def _poll_sensor(self, device_id, ipv6_addr, uri_path, resource_type, interval=60):
         """
         Poll any sensor resource (uptime, battery, voltage) with simple retry logic.
@@ -317,9 +329,13 @@ class CoAPBridgeService:
         For uptime: Also detects device reboots and re-registers observers.
         """
         logger.info(f"Starting sensor polling for {device_id}{uri_path} (interval: {interval}s)")
+        poll_count = 0
 
         while self.running:
             try:
+                poll_count += 1
+                logger.info(f"Polling {uri_path} (#{poll_count})")
+
                 payload = await self.coap_client.get_resource(ipv6_addr, uri_path)
 
                 if payload:
@@ -340,13 +356,13 @@ class CoAPBridgeService:
                             # Convert ms to seconds for display
                             value = value // 1000
 
-                        logger.debug(f"Sensor {device_id}{uri_path}: {value}")
+                        logger.info(f"Sensor {uri_path}: {value}")
                         self.mqtt.publish_state(device_id, uri_path, {'value': value})
 
                     except (json.JSONDecodeError, KeyError) as e:
                         logger.warning(f"Failed to parse sensor response for {uri_path}: {e}")
                 else:
-                    logger.debug(f"No response from {device_id}{uri_path}")
+                    logger.warning(f"No response from {uri_path} (#{poll_count})")
 
                 await asyncio.sleep(interval)
 
@@ -354,7 +370,9 @@ class CoAPBridgeService:
                 logger.info(f"Sensor polling cancelled for {device_id}{uri_path}")
                 break
             except Exception as e:
-                logger.error(f"Error polling sensor {device_id}{uri_path}: {e}")
+                logger.error(f"Error polling sensor {uri_path}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await asyncio.sleep(interval)
 
     def _extract_led_state(self, state_value):
