@@ -134,9 +134,22 @@ class CoAPBridgeService:
             logger.info("Bridge is now running - monitoring for CoAP devices...")
             logger.info("=" * 60)
 
-            # Keep service running
+            # Keep service running and monitor tasks for failures
             while self.running:
-                await asyncio.sleep(1)
+                # Check for crashed tasks and log their exceptions
+                for task in self.tasks[:]:  # Copy list to allow modification
+                    if task.done() and not task.cancelled():
+                        try:
+                            exc = task.exception()
+                            if exc:
+                                logger.error(f"Task {task.get_name()} crashed with exception: {exc}")
+                                import traceback
+                                logger.error(''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+                                # Remove crashed task from list
+                                self.tasks.remove(task)
+                        except asyncio.InvalidStateError:
+                            pass
+                await asyncio.sleep(5)  # Check every 5 seconds
 
             logger.info("Shutdown initiated...")
 
@@ -155,7 +168,12 @@ class CoAPBridgeService:
             all_devices = await self.registry.get_all_devices()
             offline_threshold = self.config.get('offline_threshold_polls', 5)
 
+            logger.info(f"Found {len(all_devices)} devices in registry")
+
             for device in all_devices:
+                logger.info(f"Processing device: {device.device_id}, "
+                           f"commissioned={getattr(device, 'commissioned', 'N/A')}, "
+                           f"is_online={getattr(device, 'is_online', 'N/A')}")
                 resources = await self.registry.get_device_resources(device.device_id)
                 logger.info(f"Re-publishing discovery for {device.device_id} ({len(resources)} resources)")
 
@@ -171,9 +189,9 @@ class CoAPBridgeService:
                 is_online = getattr(device, 'is_online', True)
                 self.mqtt.publish_availability(device.device_id, available=is_online)
 
-                # Restart monitoring tasks for commissioned devices
-                if getattr(device, 'commissioned', False):
-                    logger.info(f"Restarting monitoring for commissioned device {device.device_id}")
+                # Restart monitoring tasks for devices with resources
+                if resources:
+                    logger.info(f"Restarting monitoring for device {device.device_id} ({len(resources)} resources)")
                     for resource in resources:
                         if resource.resource_type in ('led', 'button'):
                             # Use CoAP Observe for real-time updates
