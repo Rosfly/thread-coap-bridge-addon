@@ -425,6 +425,10 @@ class CoAPBridgeService:
         self.sensor_failures[sensor_key] = 0
         self.sensor_available[sensor_key] = True
 
+        # Publish initial "online" status for per-sensor availability
+        self.mqtt.publish_sensor_availability(device_id, object_id, True)
+        logger.info(f"Published initial availability for {device_id}/{object_id}")
+
         # Apply initial delay for staggered polling
         if initial_delay > 0:
             logger.info(f"Waiting {initial_delay}s before first poll of {uri_path}")
