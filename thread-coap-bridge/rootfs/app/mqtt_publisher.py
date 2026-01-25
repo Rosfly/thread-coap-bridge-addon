@@ -155,10 +155,10 @@ class MQTTPublisher:
             resource_lower = resource_type.lower()
             if resource_lower == "battery":
                 payload["device_class"] = "battery"
-                payload["state_class"] = "measurement"
+                #payload["state_class"] = "measurement"
             elif resource_lower == "voltage":
                 payload["device_class"] = "voltage"
-                payload["state_class"] = "measurement"
+                #payload["state_class"] = "measurement"
             elif resource_lower == "uptime":
                 payload["device_class"] = "duration"
                 payload["state_class"] = "total_increasing"
