@@ -148,11 +148,13 @@ class CoAPBridgeService:
             sys.exit(1)
 
     async def _republish_all_discovery(self):
-        """Re-publish MQTT discovery for all known devices on startup."""
+        """Re-publish MQTT discovery and restart monitoring for all known devices on startup."""
         logger.info("Re-publishing MQTT discovery for all known devices...")
 
         try:
             all_devices = await self.registry.get_all_devices()
+            offline_threshold = self.config.get('offline_threshold_polls', 5)
+
             for device in all_devices:
                 resources = await self.registry.get_device_resources(device.device_id)
                 logger.info(f"Re-publishing discovery for {device.device_id} ({len(resources)} resources)")
@@ -168,6 +170,49 @@ class CoAPBridgeService:
                 # Also publish availability
                 is_online = getattr(device, 'is_online', True)
                 self.mqtt.publish_availability(device.device_id, available=is_online)
+
+                # Restart monitoring tasks for commissioned devices
+                if getattr(device, 'commissioned', False):
+                    logger.info(f"Restarting monitoring for commissioned device {device.device_id}")
+                    for resource in resources:
+                        if resource.resource_type in ('led', 'button'):
+                            # Use CoAP Observe for real-time updates
+                            observe_task = asyncio.create_task(
+                                self.coap_client.observe_resource(
+                                    device.device_id,
+                                    device.ipv6_address,
+                                    resource.uri_path,
+                                    registry=self.registry,
+                                    offline_threshold=offline_threshold,
+                                    discovery=self.discovery
+                                ),
+                                name=f"observe_{device.device_id}_{resource.uri_path}"
+                            )
+                            self.tasks.append(observe_task)
+                            logger.info(f"Restarted Observe for {device.device_id}/{resource.uri_path}")
+                        else:
+                            # Use staggered polling for sensors
+                            poll_delays = {
+                                'battery': 0,
+                                'voltage': 40,
+                                'uptime': 80,
+                            }
+                            initial_delay = poll_delays.get(resource.resource_type, 0)
+
+                            poll_task = asyncio.create_task(
+                                self._poll_sensor(
+                                    device.device_id,
+                                    device.ipv6_address,
+                                    resource.uri_path,
+                                    resource.resource_type,
+                                    interval=120,
+                                    initial_delay=initial_delay
+                                ),
+                                name=f"poll_{device.device_id}_{resource.uri_path}"
+                            )
+                            self.tasks.append(poll_task)
+                            logger.info(f"Restarted polling for {device.device_id}/{resource.uri_path} "
+                                      f"(delay={initial_delay}s, interval=120s)")
 
             logger.info(f"Re-published discovery for {len(all_devices)} devices")
 
