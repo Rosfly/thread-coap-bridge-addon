@@ -14,6 +14,60 @@ A Home Assistant add-on that bridges CoAP-enabled devices on Thread networks to 
 - **Automatic re-discovery** when devices return online
 - **SED (Sleepy End Device) support** with 65-second timeouts
 
+## Recent Changes (v0.5.0)
+
+### Home Assistant `state_class` Investigation
+
+**Investigation:** Battery and voltage sensors were not updating in Home Assistant UI despite successful MQTT publishes. Uptime (integer seconds) worked fine, but battery (%) and voltage (V) appeared stuck.
+
+#### Home Assistant's `state_class` Philosophy
+
+Home Assistant's statistics engine is strict about `state_class`:
+
+| state_class | Expected Behavior | Suitable For |
+|-------------|-------------------|--------------|
+| `measurement` | Value changes frequently, "instantaneous" | Temperature, power |
+| `total_increasing` | Value always increases, resets allowed | Energy, uptime |
+| *none* | Value may stay constant for long periods | Battery %, voltage |
+
+When HA sees `state_class: measurement` combined with:
+- Same value as before
+- Retained MQTT messages (`retain=True`)
+- Slow-changing sensors
+
+...it may **not update the UI** because:
+1. Value didn't change numerically → statistics engine discards duplicate
+2. Timestamp doesn't advance meaningfully
+3. Long-term statistics optimization skips "redundant" data
+
+#### Configuration Changes (for reference)
+
+```python
+# mqtt_publisher.py - removed state_class for slow-changing sensors
+if resource_lower == "battery":
+    payload["device_class"] = "battery"
+    # NO state_class - battery % may stay constant for hours
+# voltage: NO device_class or state_class
+# Removing device_class allows voltage to display as "4.08" instead of "4" (integer)
+```
+
+**Note:** Removing `state_class` aligns with HA's philosophy for slow-changing sensors but may not fully resolve UI update issues. The root cause may be deeper in HA's state management.
+
+**Current configuration:**
+- **Battery**: `device_class: battery` only (shows % icon)
+- **Voltage**: No device_class (preserves decimal formatting: 4.08V instead of 4V)
+- **Uptime**: `state_class: total_increasing` (correctly models always-increasing value)
+
+#### Testing Results
+
+| Test | Result |
+|------|--------|
+| **Out-of-range test** | Device moved out of Thread range → after 240s child timeout, Thread parent dropped child → sensors showed "Unavailable" in HA UI |
+| **Return online** | Device returned to range → unicast re-discovery found it → sensors came back online automatically |
+| **Device reset** | Device power-cycled → uptime decreased detected → CoAP Observe re-registered automatically |
+
+---
+
 ## Recent Changes (v0.4.0)
 
 ### SED (Sleepy End Device) Support
@@ -216,6 +270,32 @@ ot-ctl neighbor table
 **Note:** Multicast discovery is unreliable on Thread/wpan0 due to aiocoap limitations. The unicast re-discovery mechanism ensures devices are found reliably after extended disconnection.
 
 ## Lessons Learned
+
+### Home Assistant `state_class` Philosophy
+
+Home Assistant's statistics engine is designed for time-series data. Understanding `state_class` behavior is important for MQTT sensor integration:
+
+```yaml
+# For frequently changing sensors (temperature, power):
+state_class: measurement
+
+# For always-increasing values (energy, uptime):
+state_class: total_increasing
+
+# For slow-changing sensors (battery %, voltage):
+# Omit state_class entirely - HA may otherwise skip "duplicate" values
+device_class: battery  # Only this, no state_class
+```
+
+**Key observations:**
+- Battery % may stay at "88%" for hours
+- Voltage may stay at "4.08V" for hours
+- HA's statistics engine may optimize away "unchanged" values
+- This is part of HA's design philosophy for long-term statistics
+
+**Voltage decimal places:**
+- `device_class: voltage` forces HA to display integers (4V instead of 4.08V)
+- Omit `device_class` for voltage to preserve decimal formatting
 
 ### MQTT Discovery for Lights
 
